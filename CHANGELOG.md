@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-26
+
 ### Fixed
 - macOS wheel is built with `MACOSX_DEPLOYMENT_TARGET=12.0` so it installs on
   macOS 12+ instead of only the runner's release (was tagged `macosx_26_0`).
