@@ -13,6 +13,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   macOS 12+ instead of only the runner's release (was tagged `macosx_26_0`).
 
 ### Changed
+- README and the DuckDB/GizmoSQL integration test use the `adbc_scanner`
+  `CREATE SECRET` + `ATTACH` pattern (query Oracle as an attached catalog)
+  instead of `SET VARIABLE`/`adbc_connect`.
 - CI: actions/checkout, setup-go and setup-python bumped to v7.
 
 ## [0.1.0] - 2026-08-26

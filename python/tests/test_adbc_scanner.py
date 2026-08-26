@@ -33,14 +33,19 @@ def duckdb_oracle(oracle_server):
         con.close()
         pytest.skip(reason=f"adbc_scanner extension unavailable: {exc}")
 
+    # Credentials live in a DuckDB secret (README "DuckDB / GizmoSQL <->
+    # Oracle via adbc_scanner"); ATTACH exposes Oracle as a catalog and the
+    # same secret drives the adbc_scan / adbc_insert function API.
     con.execute(
-        query="""SET VARIABLE ora = adbc_connect({
-            'driver': $driver,
-            'entrypoint': 'OracleDriverInit',
-            'uri': $uri,
-            'username': $username,
-            'password': $password
-        })""",
+        query="""CREATE SECRET ora_secret (
+            TYPE adbc,
+            SCOPE $uri,
+            driver $driver,
+            entrypoint 'OracleDriverInit',
+            uri $uri,
+            username $username,
+            password $password
+        )""",
         parameters={
             "driver": adbc_driver_oracle._driver_path(),
             "uri": oracle_server.credential_free_uri,
@@ -48,8 +53,12 @@ def duckdb_oracle(oracle_server):
             "password": oracle_server.password,
         },
     )
+    # ATTACH takes no bind parameters; the URI is a literal.
+    con.execute(query=f"ATTACH '{oracle_server.credential_free_uri}' AS ora (TYPE adbc)")
+    con.execute(query="SET VARIABLE ora = adbc_connect({'secret': 'ora_secret'})")
     yield con
     con.execute(query="SELECT adbc_disconnect(getvariable('ora')::BIGINT)")
+    con.execute(query="DETACH ora")
     con.close()
 
 
@@ -108,6 +117,13 @@ def test_duckdb_adbc_insert_pushes_to_oracle(duckdb_oracle, oracle_server, table
         assert n == rows
         assert total == rows * (rows + 1) // 2
         assert max_name == "row-9999"
+
+        # ... through the attached catalog (projection + filter pushdown) ...
+        schema = oracle_server.username.upper()
+        (n_attached,) = con.execute(
+            query=f'SELECT COUNT(*) FROM ora."{schema}"."{table_name}" WHERE ID > {rows - 100}'
+        ).fetchone()
+        assert n_attached == 100
 
         # ... and independently through the plain Python DBAPI.
         with oracle.connect(uri=oracle_server.uri) as conn, conn.cursor() as cur:

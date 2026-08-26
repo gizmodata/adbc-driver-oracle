@@ -159,17 +159,25 @@ community extension, in both directions:
 INSTALL adbc_scanner FROM community;
 LOAD adbc_scanner;
 
-SET VARIABLE ora = adbc_connect({
-    'driver': '/path/to/libadbc_driver_oracle.so',   -- adbc_driver_oracle._driver_path() in Python
-    'entrypoint': 'OracleDriverInit',
-    'uri': 'oracle://db.example.com:1521/PROD',
-    'username': 'app', 'password': 's3cret'
-});
+-- credentials once, in a DuckDB secret
+CREATE SECRET ora_secret (
+    TYPE adbc,
+    SCOPE 'oracle://db.example.com:1521/PROD',
+    driver 'oracle',                      -- by name after `python -m adbc_driver_oracle install-manifest`,
+                                          -- or a path: '/path/to/libadbc_driver_oracle.so'
+    uri 'oracle://db.example.com:1521/PROD',
+    username 'app',
+    password 's3cret'
+);
 
--- pull: run SQL in Oracle, get an Arrow-backed DuckDB relation
-SELECT * FROM adbc_scan(getvariable('ora')::BIGINT, 'SELECT * FROM sales.orders WHERE amt > 100');
+-- pull: Oracle as an attached catalog (projection + filter pushdown)
+ATTACH 'oracle://db.example.com:1521/PROD' AS ora (TYPE adbc);
+SELECT * FROM ora.SALES.ORDERS WHERE AMT > 100;
+SELECT o.ORDER_ID, c.name FROM ora.SALES.ORDERS o JOIN customers c ON c.id = o.CUST_ID;
 
--- push: create an Oracle table from a DuckDB relation
+-- arbitrary Oracle SQL, and push in the other direction, via the same secret
+SET VARIABLE ora = adbc_connect({'secret': 'ora_secret'});
+SELECT * FROM adbc_scan(getvariable('ora')::BIGINT, 'SELECT * FROM sales.orders WHERE ROWNUM <= 10');
 SELECT * FROM adbc_insert(getvariable('ora')::BIGINT, 'ORDERS_COPY', (SELECT * FROM local_orders), mode := 'create');
 ```
 
