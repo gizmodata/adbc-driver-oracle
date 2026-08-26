@@ -48,9 +48,9 @@ jobs:
     env:
       ADBC_ORACLE_TEST_URI: ${{ startsWith(matrix.os, 'ubuntu') && 'oracle://scott:tiger@localhost:1521/FREEPDB1' || '' }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.25'
           cache: false
@@ -108,14 +108,14 @@ jobs:
       GIZMOSQL_URI: ${{ startsWith(matrix.os, 'ubuntu') && 'gizmosql://localhost:31337?transport=tcp' || '' }}
       GIZMOSQL_PASSWORD: gizmosql_password
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.25'
           cache: false
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
 
@@ -256,14 +256,14 @@ jobs:
             # problem matcher renders as red "error" annotations.
             extra_cflags: -Wno-dll-attribute-on-redeclaration
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.25'
           cache: false
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         if: ${{ !matrix.dll_only }}
         with:
           python-version: '3.12'
@@ -291,6 +291,10 @@ jobs:
           # Keep cgo's default flags and append per-platform extras
           # (setting CGO_CFLAGS at all replaces the "-O2 -g" default).
           CGO_CFLAGS: -O2 -g ${{ matrix.extra_cflags }}
+          # Let the macOS wheel install on macOS 12+ rather than only on
+          # the runner's own release (it was tagged macosx_26_0).
+          MACOSX_DEPLOYMENT_TARGET: '12.0'
+
         run: |
           go build -buildmode=c-shared -tags driverlib \
             -o "pkg/oracle/libadbc_driver_oracle.${{ matrix.ext }}" ./pkg/oracle
@@ -299,6 +303,8 @@ jobs:
       - name: Build wheel
         if: ${{ !matrix.dll_only }}
         shell: bash
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '12.0'
         run: |
           python -m pip install --upgrade pip build
           python -m build --wheel
@@ -403,7 +409,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/download-artifact@v8
         with:
