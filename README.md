@@ -3,7 +3,7 @@
 **An [Apache Arrow ADBC](https://arrow.apache.org/adbc/) driver for [Oracle Database](https://www.oracle.com/database/) — pure Go, no Oracle Client libraries required.**
 
 [<img src="https://img.shields.io/badge/GitHub-gizmodata%2Fadbc--driver--oracle-blue.svg?logo=Github">](https://github.com/gizmodata/adbc-driver-oracle)
-[![CI](https://github.com/gizmodata/adbc-driver-oracle/actions/workflows/python.yml/badge.svg)](https://github.com/gizmodata/adbc-driver-oracle/actions/workflows/python.yml)
+[![CI](https://github.com/gizmodata/adbc-driver-oracle/actions/workflows/ci.yml/badge.svg)](https://github.com/gizmodata/adbc-driver-oracle/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/gizmodata/adbc-driver-oracle.svg)](https://pkg.go.dev/github.com/gizmodata/adbc-driver-oracle)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/gizmodata/adbc-driver-oracle)](go.mod)
 [![Supported Python Versions](https://img.shields.io/pypi/pyversions/adbc-driver-oracle)](https://pypi.org/project/adbc-driver-oracle/)
