@@ -2,13 +2,14 @@
 
 **An [Apache Arrow ADBC](https://arrow.apache.org/adbc/) driver for [Oracle Database](https://www.oracle.com/database/) — pure Go, no Oracle Client libraries required.**
 
-[![PyPI](https://img.shields.io/pypi/v/adbc-driver-oracle?label=PyPI&logo=pypi&logoColor=white&color=blue)](https://pypi.org/project/adbc-driver-oracle/)
-[![PyPI downloads](https://img.shields.io/pypi/dm/adbc-driver-oracle?label=downloads&logo=pypi&logoColor=white)](https://pypistats.org/packages/adbc-driver-oracle)
-[![Python versions](https://img.shields.io/pypi/pyversions/adbc-driver-oracle?label=Python&logo=python&logoColor=white)](https://pypi.org/project/adbc-driver-oracle/)
-[![Go module](https://img.shields.io/github/v/tag/gizmodata/adbc-driver-oracle?label=Go%20module&logo=go&logoColor=white&sort=semver)](https://pkg.go.dev/github.com/gizmodata/adbc-driver-oracle)
+[<img src="https://img.shields.io/badge/GitHub-gizmodata%2Fadbc--driver--oracle-blue.svg?logo=Github">](https://github.com/gizmodata/adbc-driver-oracle)
 [![CI](https://github.com/gizmodata/adbc-driver-oracle/actions/workflows/python.yml/badge.svg)](https://github.com/gizmodata/adbc-driver-oracle/actions/workflows/python.yml)
-[![GitHub Repo](https://img.shields.io/badge/github-gizmodata%2Fadbc--driver--oracle-181717?logo=github)](https://github.com/gizmodata/adbc-driver-oracle)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Go Reference](https://pkg.go.dev/badge/github.com/gizmodata/adbc-driver-oracle.svg)](https://pkg.go.dev/github.com/gizmodata/adbc-driver-oracle)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/gizmodata/adbc-driver-oracle)](go.mod)
+[![Supported Python Versions](https://img.shields.io/pypi/pyversions/adbc-driver-oracle)](https://pypi.org/project/adbc-driver-oracle/)
+[![PyPI version](https://badge.fury.io/py/adbc-driver-oracle.svg)](https://badge.fury.io/py/adbc-driver-oracle)
+[![PyPI Downloads](https://img.shields.io/pepy/dt/adbc-driver-oracle.svg)](https://pypi.org/project/adbc-driver-oracle/)
+[![License](https://img.shields.io/github/license/gizmodata/adbc-driver-oracle)](LICENSE)
 
 Speaks Oracle's native TNS/TTC wire protocol directly from Go and returns
 Apache Arrow `RecordBatch`es straight from the result set — the way
