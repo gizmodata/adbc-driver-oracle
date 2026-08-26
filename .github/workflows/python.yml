@@ -1,0 +1,469 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# One workflow, one DAG:
+#   ┌─ go-test ─┐
+#   │           ├─> wheels ──> publish (PyPI)
+#   └─ test  ───┘            ╲
+#                              └─> github-release
+#
+# - go-test runs `go vet` + `go test -race ./...` on linux + macOS
+# - test runs the Python unit + integration suite (5 Pythons × 3 OS)
+# - both run on every PR, branch push, and tag push
+# - wheels run only on tag push, gated on **both** test suites passing
+# - publish (PyPI) and github-release run only on tag push, gated on
+#   all wheels building successfully
+
+jobs:
+  go-test:
+    name: Go tests
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    services:
+      oracle:
+        # GitHub Actions service containers only run on Linux runners;
+        # on macOS/Windows this block is ignored and integration tests skip.
+        image: ${{ startsWith(matrix.os, 'ubuntu') && 'gvenzl/oracle-free:23-slim-faststart' || '' }}
+        env:
+          ORACLE_PASSWORD: tiger
+          APP_USER: scott
+          APP_USER_PASSWORD: tiger
+        ports:
+          - 1521:1521
+        options: >-
+          --health-cmd healthcheck.sh
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      ADBC_ORACLE_TEST_URI: ${{ startsWith(matrix.os, 'ubuntu') && 'oracle://scott:tiger@localhost:1521/FREEPDB1' || '' }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: false
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test -race -timeout 5m ./...
+
+  test:
+    name: Python tests
+    runs-on: ${{ matrix.os }}
+    # Only the Linux legs get a live Oracle Database (GitHub Actions
+    # service containers are Linux-only); macOS / Windows run the unit
+    # tests and the integration suite auto-skips there. If we ship a
+    # wheel for a platform, its unit tests must pass.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ['3.10', '3.11', '3.12', '3.13', '3.14']
+    defaults:
+      run:
+        shell: bash
+    services:
+      oracle:
+        # GitHub Actions service containers only run on Linux runners;
+        # on macOS/Windows this block is ignored and integration tests skip.
+        image: ${{ startsWith(matrix.os, 'ubuntu') && 'gvenzl/oracle-free:23-slim-faststart' || '' }}
+        env:
+          ORACLE_PASSWORD: tiger
+          APP_USER: scott
+          APP_USER_PASSWORD: tiger
+        ports:
+          - 1521:1521
+        options: >-
+          --health-cmd healthcheck.sh
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 30
+      gizmosql:
+        # Linux-only, like the Oracle service. Used by the Oracle -> GizmoSQL
+        # ADBC-to-ADBC streaming test; everything else ignores it.
+        image: ${{ startsWith(matrix.os, 'ubuntu') && 'gizmodata/gizmosql:latest' || '' }}
+        env:
+          TLS_ENABLED: '0'
+          GIZMOSQL_PASSWORD: gizmosql_password
+        ports:
+          - 31337:31337
+    env:
+      ADBC_ORACLE_TEST_URI: ${{ startsWith(matrix.os, 'ubuntu') && 'oracle://scott:tiger@localhost:1521/FREEPDB1' || '' }}
+      # Oracle -> GizmoSQL streaming-ingest test (test-only dependency; the
+      # driver itself has no GizmoSQL code).
+      GIZMOSQL_URI: ${{ startsWith(matrix.os, 'ubuntu') && 'gizmosql://localhost:31337?transport=tcp' || '' }}
+      GIZMOSQL_PASSWORD: gizmosql_password
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install clang-format (macOS)
+        if: matrix.os == 'macos-latest'
+        # The runner image ships with aws/tap pre-tapped, which trips
+        # Homebrew's tap-trust warning on every brew command. We don't
+        # use anything from it — untap it first (with the trust check
+        # suppressed for that one command so the untap itself is quiet).
+        run: |
+          HOMEBREW_NO_REQUIRE_TAP_TRUST=1 brew untap aws/tap 2>/dev/null || true
+          brew install clang-format
+
+      - name: Install goimports + clang-format (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          go install golang.org/x/tools/cmd/goimports@latest
+          sudo apt-get update && sudo apt-get install -y clang-format
+
+      - name: Build c-shared driver library
+        run: |
+          export PATH="$HOME/go/bin:$PATH"
+          case "${{ runner.os }}" in
+            macOS)   SUFFIX=dylib ;;
+            Windows) SUFFIX=dll   ;;
+            *)       SUFFIX=so    ;;
+          esac
+          go build -buildmode=c-shared -tags driverlib \
+            -o "pkg/oracle/libadbc_driver_oracle.${SUFFIX}" ./pkg/oracle
+          LIB_PATH="$PWD/pkg/oracle/libadbc_driver_oracle.${SUFFIX}"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            # Git Bash $PWD is /d/a/... — translate to D:/a/... so that
+            # Python's pathlib and setup.py's shutil.copy can find it.
+            LIB_PATH=$(cygpath -m "$LIB_PATH")
+          fi
+          echo "ADBC_ORACLE_LIBRARY=${LIB_PATH}" >> "$GITHUB_ENV"
+
+      - name: Install Python wheel from source tree
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[test,gizmosql]"
+
+      - name: Run Python tests
+        # No -m filter: run the unit tests (manifest writer etc.) plus
+        # the integration suite against the Oracle service container
+        # (Linux) — integration tests self-skip where no DB is reachable.
+        run: pytest -v
+
+      - name: Upload c-shared driver library
+        # Only upload once per OS — every python version produces the
+        # same binary so we keep the 3.12 build to avoid duplicates.
+        # (Use 3.12 specifically because that's the version the wheel
+        # job below uses.)
+        if: matrix.python == '3.12'
+        uses: actions/upload-artifact@v7
+        with:
+          name: libadbc_driver_oracle-${{ runner.os }}
+          path: pkg/oracle/libadbc_driver_oracle.*
+          if-no-files-found: error
+
+      - name: Upload test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pytest-${{ matrix.os }}-${{ matrix.python }}
+          path: |
+            *.log
+            python/*.log
+
+  wheels:
+    # Builds the wheel AND smoke-tests it from a clean venv, so
+    # packaging bugs (wrong-binary-bundled, missing dep, wrong platform
+    # tag, etc.) trip CI before publish — not after a PyPI release.
+    # Runs on every PR / branch / tag push; only publish + release jobs
+    # are tag-gated.
+    name: Wheel ${{ matrix.os }} ${{ matrix.arch }}
+    needs: [go-test, test]
+    runs-on: ${{ matrix.runner }}
+    services:
+      oracle:
+        image: ${{ matrix.runner == 'ubuntu-latest' && 'gvenzl/oracle-free:23-slim-faststart' || '' }}
+        env:
+          ORACLE_PASSWORD: tiger
+          APP_USER: scott
+          APP_USER_PASSWORD: tiger
+        ports:
+          - 1521:1521
+        options: >-
+          --health-cmd healthcheck.sh
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      ADBC_ORACLE_TEST_URI: ${{ matrix.runner == 'ubuntu-latest' && 'oracle://scott:tiger@localhost:1521/FREEPDB1' || '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            arch: x86_64
+            runner: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            ext: so
+          - os: linux
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+            ext: so
+          - os: macos
+            arch: arm64
+            runner: macos-latest
+            goos: darwin
+            goarch: arm64
+            ext: dylib
+          - os: windows
+            arch: x86_64
+            runner: windows-latest
+            goos: windows
+            goarch: amd64
+            ext: dll
+          # dll_only: pyarrow and adbc-driver-manager publish no
+          # win_arm64 wheels yet, so an adbc-driver-oracle wheel could
+          # never pip-install on Windows ARM. Ship the c-shared driver
+          # DLL as a release artifact (Go / C / driver-manifest
+          # consumers) and flip dll_only off once upstream wheels exist.
+          - os: windows
+            arch: arm64
+            runner: windows-11-arm
+            goos: windows
+            goarch: arm64
+            ext: dll
+            dll_only: true
+            # llvm-mingw clang warns that cgo's generated export-header
+            # prolog re-adds dllexport to declarations from exports.go —
+            # a cosmetic cgo artifact (gcc doesn't warn) that GitHub's
+            # problem matcher renders as red "error" annotations.
+            extra_cflags: -Wno-dll-attribute-on-redeclaration
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: false
+
+      - uses: actions/setup-python@v6
+        if: ${{ !matrix.dll_only }}
+        with:
+          python-version: '3.12'
+
+      - name: Install llvm-mingw (cgo C toolchain for windows/arm64)
+        if: ${{ matrix.dll_only }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          url=$(curl -s https://api.github.com/repos/mstorsjo/llvm-mingw/releases/latest \
+            | grep -o 'https://[^"]*ucrt-aarch64\.zip' | head -1)
+          echo "Downloading $url"
+          curl -sL "$url" -o llvm-mingw.zip
+          unzip -q llvm-mingw.zip -d "$RUNNER_TEMP/llvm-mingw"
+          tooldir=$(ls -d "$RUNNER_TEMP"/llvm-mingw/llvm-mingw-*)
+          echo "$tooldir/bin" >> "$GITHUB_PATH"
+          echo "CC=$tooldir/bin/aarch64-w64-mingw32-clang" >> "$GITHUB_ENV"
+
+      - name: Build c-shared driver library
+        shell: bash
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '1'
+          # Keep cgo's default flags and append per-platform extras
+          # (setting CGO_CFLAGS at all replaces the "-O2 -g" default).
+          CGO_CFLAGS: -O2 -g ${{ matrix.extra_cflags }}
+        run: |
+          go build -buildmode=c-shared -tags driverlib \
+            -o "pkg/oracle/libadbc_driver_oracle.${{ matrix.ext }}" ./pkg/oracle
+          echo "ADBC_ORACLE_LIBRARY=$PWD/pkg/oracle/libadbc_driver_oracle.${{ matrix.ext }}" >> "$GITHUB_ENV"
+
+      - name: Build wheel
+        if: ${{ !matrix.dll_only }}
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --wheel
+          ls -la dist/
+
+      - name: Smoke-test wheel in a clean venv
+        if: ${{ !matrix.dll_only }}
+        # Install the freshly built wheel into a fresh venv (no source
+        # tree on PYTHONPATH) and run the integration suite from a copy
+        # of python/tests/ outside the repo. Catches bugs that the
+        # editable-install path in the `test` job can't see:
+        #   - wrong/missing binary in the wheel (py3-none-any.whl trap)
+        #   - missing runtime dep (pyarrow was once in dbapi extra)
+        #   - import paths broken in installed layout
+        shell: bash
+        run: |
+          set -e
+          VENV="${RUNNER_TEMP}/wheel-smoke-venv"
+          rm -rf "$VENV"
+          python -m venv "$VENV"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            VPY="$VENV/Scripts/python.exe"
+          else
+            VPY="$VENV/bin/python"
+          fi
+          "$VPY" -m pip install --upgrade pip --quiet
+          WHEEL=$(ls dist/*.whl | head -1)
+          echo "Installing $WHEEL plus test dependencies"
+          "$VPY" -m pip install "$WHEEL" pytest pandas --quiet
+          # Run tests from a copy outside the source tree so the package
+          # has to resolve via the wheel install, not the source dir.
+          TESTS="${RUNNER_TEMP}/wheel-smoke-tests"
+          rm -rf "$TESTS"
+          cp -R python/tests "$TESTS"
+          cd "$TESTS"
+          "$VPY" -m pytest -v \
+            --override-ini='markers=integration: integration tests' .
+
+      - name: Upload wheel artifact
+        if: ${{ !matrix.dll_only }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: wheel-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/*.whl
+
+      - name: Stage c-shared library + checksum for release
+        shell: bash
+        run: |
+          mkdir -p release-artifacts
+          base="libadbc_driver_oracle-${{ matrix.goos }}-${{ matrix.goarch }}.${{ matrix.ext }}"
+          cp "pkg/oracle/libadbc_driver_oracle.${{ matrix.ext }}" "release-artifacts/${base}"
+          if command -v sha256sum > /dev/null 2>&1; then
+            (cd release-artifacts && sha256sum "${base}" > "${base}.sha256")
+          else
+            (cd release-artifacts && shasum -a 256 "${base}" > "${base}.sha256")
+          fi
+
+      - name: Upload c-shared library artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: libadbc_driver_oracle-release-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: release-artifacts/*
+
+  publish:
+    name: Publish to PyPI
+    needs: wheels
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/adbc-driver-oracle
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Stage wheels for PyPI
+        run: |
+          mkdir -p dist
+          # Wheels live under artifacts/wheel-<os>-<arch>/*.whl
+          find artifacts -type d -name 'wheel-*' -exec cp -r {}/. dist/ \;
+          ls -la dist/
+
+      - name: Publish to PyPI via OIDC trusted publishing
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          skip-existing: true
+
+  github-release:
+    name: Attach c-shared libraries to GitHub Release
+    needs: wheels
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Extract release notes from CHANGELOG.md
+        id: changelog
+        run: |
+          # Strip the leading 'v' from the tag (refs/tags/v1.2.3 -> 1.2.3)
+          # and pull the matching "## [VERSION] ..." section out of
+          # CHANGELOG.md (stop at the next "## [" heading). Save to
+          # release_notes.md; fall back to an empty file so the release
+          # still gets created with auto-generated notes.
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "Extracting release notes for version: ${VERSION}"
+          awk -v ver="${VERSION}" '
+            $0 ~ "^## \\[" ver "\\]" { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > release_notes.md
+
+          if [ -s release_notes.md ]; then
+            echo "---- release_notes.md ----"
+            cat release_notes.md
+          else
+            echo "WARNING: no matching CHANGELOG section for ${VERSION}; release will use auto-generated notes."
+          fi
+
+      - name: Stage c-shared library bundle
+        run: |
+          mkdir -p release-bundle
+          find artifacts -type d -name 'libadbc_driver_oracle-release-*' -exec cp -r {}/. release-bundle/ \;
+          # One combined checksum manifest across every platform.
+          (cd release-bundle && find . -type f -name 'libadbc_driver_oracle-*' \
+             ! -name '*.sha256' -exec sha256sum {} \; > SHA256SUMS) \
+             || (cd release-bundle && find . -type f -name 'libadbc_driver_oracle-*' \
+                  ! -name '*.sha256' -exec shasum -a 256 {} \; > SHA256SUMS)
+          ls -la release-bundle/
+
+      - name: Attach to GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          body_path: release_notes.md
+          files: |
+            release-bundle/libadbc_driver_oracle-*
+            release-bundle/SHA256SUMS
+          generate_release_notes: true
+          draft: false
+
+  pkgsite-warm:
+    name: Warm pkg.go.dev cache
+    needs: [publish, github-release]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger pkg.go.dev fetch
+        # pkg.go.dev indexes Go modules on demand — the first visitor to
+        # github.com/gizmodata/adbc-driver-oracle@<new tag> would otherwise
+        # see the "Fetch" stub page. POSTing to the same fetch endpoint
+        # the page's "Request" button uses warms the cache for everyone.
+        # `|| true` because the endpoint isn't a contractually stable
+        # public API, and pkg.go.dev rate-limits during heavy load.
+        run: |
+          ref="${GITHUB_REF_NAME}"
+          curl -sS -X POST \
+            "https://pkg.go.dev/fetch/github.com/gizmodata/adbc-driver-oracle@${ref}" \
+            -o /dev/null -w "pkg.go.dev fetch (${ref}): HTTP %{http_code} in %{time_total}s\n" \
+            || true

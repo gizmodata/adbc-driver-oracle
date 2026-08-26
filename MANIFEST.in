@@ -1,0 +1,4 @@
+include LICENSE
+include README.md
+include python/adbc_driver_oracle/libadbc_driver_oracle.*
+recursive-include python/adbc_driver_oracle *.py py.typed

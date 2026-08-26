@@ -1,0 +1,44 @@
+# Go build artifacts
+*.a
+*.o
+*.so
+*.dylib
+*.dll
+*.exe
+*.test
+*.out
+coverage.out
+coverage.html
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+
+# Python build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+wheelhouse/
+*.whl
+.pytest_cache/
+.tox/
+.venv/
+venv/
+
+# Generated cgo headers
+pkg/oracle/libadbc_driver_oracle*.h
+pkg/oracle/libadbc_driver_oracle*.{so,dylib,dll}
+
+# Test logs
+*.log
+
+# Local Oracle test DB data dir
+oracle_data/
