@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-26
+
 ### Added
 
 - Initial pure-Go ADBC driver for Oracle Database: TNS/TTC wire protocol
@@ -35,3 +37,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (ADBC to ADBC) and DuckDB `adbc_scanner` pull/push against Oracle
   through the c-shared driver (GizmoSQL / DuckDB are test-only
   dependencies).
+
+[Unreleased]: https://github.com/gizmodata/adbc-driver-oracle/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/gizmodata/adbc-driver-oracle/releases/tag/v0.1.0
