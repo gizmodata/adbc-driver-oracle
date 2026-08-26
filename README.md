@@ -469,4 +469,4 @@ adbc-driver-oracle/
 
 ## License
 
-[MIT](https://github.com/gizmodata/adbc-driver-oracle/blob/main/LICENSE) — see `LICENSE` for full attribution.
+[MIT](https://github.com/gizmodata/adbc-driver-oracle/blob/main/LICENSE). Protocol reference credits are listed above.

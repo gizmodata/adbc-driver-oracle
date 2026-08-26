@@ -19,16 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
-------------------------------------------------------------------------------
-
-This project includes a clean-room Go port of the Quack wire codec
-originally written in Java for `com.gizmodata:quack-jdbc`
-(https://github.com/gizmodata/quack-jdbc, MIT). Both projects ultimately
-trace the wire format documentation to
-`https://github.com/tobilg/quack-protocol` by Tobi (MIT).
-
-The driver is built on the Apache Arrow ADBC Go framework
-(https://github.com/apache/arrow-adbc, Apache-2.0) and the Apache Arrow Go
-library (https://github.com/apache/arrow-go, Apache-2.0); both ship under
-their own license terms, which apply to those libraries.
