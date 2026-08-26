@@ -330,12 +330,17 @@ jobs:
           "$VPY" -m pip install "$WHEEL" pytest pandas --quiet
           # Run tests from a copy outside the source tree so the package
           # has to resolve via the wheel install, not the source dir.
-          TESTS="${RUNNER_TEMP}/wheel-smoke-tests"
+          # The tests use package-relative imports (from .conftest import
+          # ...), so keep them as a `tests` package under a fresh rootdir.
+          TESTS="${RUNNER_TEMP}/wheel-smoke"
           rm -rf "$TESTS"
-          cp -R python/tests "$TESTS"
+          mkdir -p "$TESTS"
+          cp -R python/tests "$TESTS/tests"
           cd "$TESTS"
           "$VPY" -m pytest -v \
-            --override-ini='markers=integration: integration tests' .
+            --override-ini='markers=integration: integration tests
+              gizmosql: needs GizmoSQL
+              duckdb_ext: needs duckdb + adbc_scanner' tests
 
       - name: Upload wheel artifact
         if: ${{ !matrix.dll_only }}
