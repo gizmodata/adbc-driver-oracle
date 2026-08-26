@@ -6,6 +6,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Integration test and README section for Columnar's DuckDB `adbc` community
+  extension: `read_adbc`, `ATTACH 'profile://…'`, and INSERT / CTAS into
+  Oracle through ADBC bulk ingest, using the driver manifest + a connection
+  profile.
+
+### Fixed
+- Database, connection and statement now implement the full ADBC
+  `GetSetOptions` surface (typed get/set variants). Consumers that query
+  connection options — e.g. the DuckDB `adbc` extension's `ATTACH` — failed
+  with "AdbcConnectionGetOption: options are not supported".
+
 ## [0.1.1] - 2026-08-26
 
 ### Fixed

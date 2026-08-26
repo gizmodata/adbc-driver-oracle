@@ -183,6 +183,44 @@ SELECT * FROM adbc_insert(getvariable('ora')::BIGINT, 'ORDERS_COPY', (SELECT * F
 
 `python/tests/test_adbc_scanner.py` covers both directions.
 
+### DuckDB via connection profiles (Columnar's `adbc` extension)
+
+Columnar's [`adbc`](https://github.com/columnar-tech/duckdb-adbc-client)
+community extension (see the
+[GizmoSQL guide](https://docs.gizmosql.com/adbc_duckdb_extension/))
+resolves databases through ADBC connection profiles — no credentials in
+your SQL — and additionally supports writes (`INSERT`, `COPY`,
+`CREATE TABLE AS`) into the attached database through ADBC bulk ingest:
+
+```sh
+python -m adbc_driver_oracle install-manifest      # registers driver "oracle"
+cat > ~/.config/adbc/profiles/prod.toml <<EOF        # macOS: ~/Library/Application Support/ADBC/Profiles/
+profile_version = 1
+driver = "oracle"
+
+[Options]
+uri = "oracle://db.example.com:1521/PROD"
+username = "app"
+password = "s3cret"
+EOF
+```
+
+```sql
+INSTALL adbc FROM community;
+LOAD adbc;
+
+SELECT * FROM read_adbc('profile://prod', 'SELECT * FROM sales.orders WHERE ROWNUM <= 10');
+
+ATTACH 'profile://prod' AS ora (TYPE adbc);
+USE ora.SALES;
+SELECT COUNT(*) FROM ORDERS;
+CREATE TABLE ORDERS_2024 AS SELECT * FROM memory.staged_orders;   -- bulk ingest into Oracle
+```
+
+`python/tests/test_duckdb_adbc_client.py` covers `read_adbc`, `ATTACH`,
+and CTAS/INSERT. (The `adbc_scanner` extension above is the one to use
+when you want predicate/projection pushdown on attached tables.)
+
 ### Bulk ingest (Arrow → Oracle)
 
 ```python
