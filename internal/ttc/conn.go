@@ -151,9 +151,9 @@ func Dial(ctx context.Context, cfg *Config) (*Conn, error) {
 			}
 			c.caps = tns.NewCapabilities()
 			// The NNE pass must not advertise out-of-band breaks: a raw TCP
-			// urgent byte bypasses the encrypted packet channel and servers
-			// (e.g. Oracle Cloud) reject or hang on it. Cancellation over
-			// NNE falls back to in-band interrupt markers.
+			// urgent byte bypasses the encrypted packet channel and some
+			// servers reject or hang on it. Cancellation over NNE falls
+			// back to in-band interrupt markers.
 			c.caps.SupportsOOB = false
 			if cfg.SDU > 0 {
 				c.caps.SDU = cfg.SDU
@@ -427,9 +427,9 @@ func (c *Conn) negotiateANO(ctx0 ...context.Context) error {
 		c.transport.SetSecurity(sec)
 		c.wbuf.SizeForSDU()
 		// Out-of-band breaks send a raw TCP urgent byte that bypasses the
-		// encrypted/checksummed packet channel; servers reject that once
-		// Native Network Encryption is active. Fall back to in-band
-		// interrupt markers for cancellation.
+		// encrypted/checksummed packet channel; some servers reject or
+		// hang on that once Native Network Encryption is active. Fall back
+		// to in-band interrupt markers for cancellation.
 		c.caps.SupportsOOB = false
 		if c.cfg.Trace != nil {
 			c.cfg.Trace("Native Network Encryption active: encryption=%d checksum=%d", sec.EncryptionID, sec.ChecksumID)

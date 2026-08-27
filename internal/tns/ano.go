@@ -16,7 +16,8 @@ import (
 // (checksum) services, performing a Diffie-Hellman key exchange when a
 // checksum or encryption service is selected.
 //
-// Ported from the community go-ora driver (MIT).
+// Reimplemented in Go by reference to the community go-ora driver, an
+// openly-licensed (MIT) implementation.
 
 const anoVersion = 0xB200200
 const anoMagic = 0xDEADBEEF

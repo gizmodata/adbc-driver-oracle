@@ -16,8 +16,9 @@ import (
 
 // Native Network Encryption (Oracle Advanced Networking Option) support:
 // after negotiation every DATA packet payload carries a keyed-hash
-// trailer and/or is AES-CBC encrypted. The constructions mirror the
-// community go-ora driver (MIT), which reverse-engineered them.
+// trailer and/or is AES-CBC encrypted. The constructions were
+// reimplemented in Go by reference to the community go-ora driver, an
+// openly-licensed (MIT) implementation.
 
 // Encryption algorithm ids as negotiated with the server.
 const (

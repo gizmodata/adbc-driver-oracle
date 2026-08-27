@@ -131,12 +131,11 @@ without a listener on localhost:1521.
   in `Conn.reset()`, *before* any post-reset packet is read/unwrapped) —
   getting that ordering wrong desyncs on the first error. Markers/control
   packets are never encrypted. **OOB breaks are disabled for the whole NNE
-  pass** — a raw TCP urgent byte bypasses the encrypted channel and Oracle
-  Cloud resets/hangs on it (found against a live OCI 26ai EE server; the
-  local slim container tolerated it, so this needs a real cloud server to
-  reproduce). Cancellation over NNE uses in-band interrupt markers. Local
+  pass** — a raw TCP urgent byte bypasses the encrypted channel and some
+  servers reset/hang on it; the local slim container tolerated it, so this
+  needs a server that both requires NNE and enforces that behavior to
+  reproduce. Cancellation over NNE uses in-band interrupt markers. Local
   NNE-required container: add a `sqlnet.ora` via the image init hook.
-  Verified end-to-end against Oracle Cloud 26ai EE (AES256/SHA256).
 - Object types (`internal/ttc/objtype.go`, `objimage.go`, driver
   `objects.go`): type metadata comes from ALL_TYPES / ALL_TYPE_ATTRS /
   ALL_COLL_TYPES (not dbms_pickler — it needs a REF CURSOR OUT bind),
