@@ -6,7 +6,9 @@ library:
     duckdb ──adbc_scanner──▶ libadbc_driver_oracle ──TNS/TTC──▶ Oracle
 
 Both directions are exercised: ``adbc_scan`` pulls Oracle result sets into
-DuckDB, ``adbc_insert`` pushes a DuckDB relation into a new Oracle table.
+DuckDB, and DuckDB writes back to Oracle two ways — ``CREATE TABLE ... AS``
+through the attached catalog (``USE ora.<schema>``) and the ``adbc_insert``
+function.
 
 Skipped when the ``duckdb`` package or the extension is unavailable.
 """
@@ -85,6 +87,48 @@ def test_duckdb_adbc_scan_pulls_from_oracle(duckdb_oracle):
     assert kinds["I"] == "BIGINT"
     assert kinds["TS"].startswith("TIMESTAMP")
     assert kinds["S"] == "VARCHAR"
+
+
+def test_duckdb_attach_ctas_writes_to_oracle(duckdb_oracle, oracle_server, table_name):
+    """Push via the attached catalog with plain SQL — no adbc_insert().
+
+    ``USE ora.<schema>`` then ``CREATE TABLE ... AS SELECT`` bulk-ingests a
+    DuckDB relation straight into Oracle through adbc_scanner's ATTACH, i.e.
+    parity with the adbc_insert() function for the common create-and-load case.
+    """
+    con = duckdb_oracle
+    import adbc_driver_oracle.dbapi as oracle
+
+    rows = 5_000
+    con.execute(
+        query=f"""CREATE TABLE local_ctas AS
+                  SELECT i AS id, 'row-' || i AS name
+                  FROM range(1, {rows + 1}) t(i)"""
+    )
+    schema = oracle_server.username.upper()
+    try:
+        # Write through the attached catalog: switch into the Oracle schema,
+        # then CREATE TABLE ... AS. No function call, just SQL.
+        con.execute(query=f'USE ora."{schema}"')
+        con.execute(query=f'CREATE TABLE "{table_name}" AS SELECT * FROM memory.local_ctas')
+        con.execute(query="USE memory")
+
+        # Read it back through the attached catalog (projection + filter pushdown).
+        (n_attached,) = con.execute(
+            query=f'SELECT COUNT(*) FROM ora."{schema}"."{table_name}" WHERE ID > {rows - 100}'
+        ).fetchone()
+        assert n_attached == 100
+
+        # ... and independently through the plain Python DBAPI.
+        with oracle.connect(uri=oracle_server.uri) as conn, conn.cursor() as cur:
+            cur.execute(f"SELECT COUNT(*), SUM(id) FROM {table_name}")
+            count, total = cur.fetchone()
+            assert count == rows
+            assert total == rows * (rows + 1) // 2
+    finally:
+        con.execute(query="USE memory")
+        with oracle.connect(uri=oracle_server.uri) as conn, conn.cursor() as cur:
+            drop_table_quietly(cur, table_name)
 
 
 def test_duckdb_adbc_insert_pushes_to_oracle(duckdb_oracle, oracle_server, table_name):

@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-08-27
+
+### Added
+
+- README + `test_adbc_scanner.py`: document and test writing back to Oracle
+  through the attached catalog with plain SQL (`USE ora.<schema>;
+  CREATE TABLE ... AS SELECT`), in addition to the existing `adbc_insert()`
+  function push — both verified against a live Oracle server.
+
 ## [0.4.1] - 2026-08-27
 
 ### Added
@@ -125,7 +134,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   through the c-shared driver (GizmoSQL / DuckDB are test-only
   dependencies).
 
-[Unreleased]: https://github.com/gizmodata/adbc-driver-oracle/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/gizmodata/adbc-driver-oracle/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/gizmodata/adbc-driver-oracle/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/gizmodata/adbc-driver-oracle/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/gizmodata/adbc-driver-oracle/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/gizmodata/adbc-driver-oracle/compare/v0.2.0...v0.3.0

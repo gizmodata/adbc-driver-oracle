@@ -177,13 +177,27 @@ ATTACH 'oracle://db.example.com:1521/PROD' AS ora (TYPE adbc);
 SELECT * FROM ora.SALES.ORDERS WHERE AMT > 100;
 SELECT o.ORDER_ID, c.name FROM ora.SALES.ORDERS o JOIN customers c ON c.id = o.CUST_ID;
 
--- arbitrary Oracle SQL, and push in the other direction, via the same secret
+-- push (the simple way): write straight into Oracle through the attached
+-- catalog with plain SQL — USE the Oracle schema, then CREATE TABLE ... AS
+USE ora.SALES;
+CREATE TABLE ORDERS_COPY AS SELECT * FROM memory.local_orders;   -- CTAS into Oracle
+USE memory;
+
+-- push (the function API): the same, for arbitrary SQL, via the secret
 SET VARIABLE ora = adbc_connect({'secret': 'ora_secret'});
 SELECT * FROM adbc_scan(getvariable('ora')::BIGINT, 'SELECT * FROM sales.orders WHERE ROWNUM <= 10');
-SELECT * FROM adbc_insert(getvariable('ora')::BIGINT, 'ORDERS_COPY', (SELECT * FROM local_orders), mode := 'create');
+SELECT * FROM adbc_insert(getvariable('ora')::BIGINT, 'ORDERS_COPY2', (SELECT * FROM local_orders), mode := 'create');
 ```
 
-`python/tests/test_adbc_scanner.py` covers both directions.
+Both write paths work: `USE <attached schema>; CREATE TABLE ... AS ...` (and
+`INSERT INTO ...`) through the attached catalog, or the `adbc_insert()`
+function for arbitrary relations. `python/tests/test_adbc_scanner.py` covers
+reads and both write paths.
+
+Credentials can live in a self-contained DuckDB secret (above) or in an ADBC
+connection profile — `adbc_scanner` resolves `profile://…` URIs too, so
+profiles are not specific to any one extension (the connection-profiles
+section below shows the profile setup).
 
 ### DuckDB via connection profiles (the `adbc` community extension)
 
