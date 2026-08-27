@@ -267,6 +267,8 @@ array-bound `INSERT`s, 5000 per round trip. Statement options
 | `adbc.oracle.ingest.string_type`     | `VARCHAR2` | `VARCHAR2`, `NVARCHAR2`, `CLOB` or `NCLOB` for string columns.  |
 | `adbc.oracle.ingest.raw_length`      | `2000`     | `RAW(n)` length for Arrow binary columns.                      |
 | `adbc.oracle.ingest.binary_type`     | `RAW`      | `RAW` or `BLOB` for binary columns.                            |
+| `adbc.oracle.ingest.struct_type`     | `JSON`     | `JSON` (21c+), `CLOB`, `VARCHAR2` or `BLOB` for `list` / `struct` / `map` columns (stored as JSON text). |
+| `adbc.oracle.ingest.tablespace`      | (default)  | `TABLESPACE` clause for tables created by ingest.              |
 
 Values larger than the server's maximum `VARCHAR2`/`RAW` size are bound
 as `LONG` / `LONG RAW`, so strings and blobs of any size load into
@@ -311,6 +313,30 @@ cur.execute("""DECLARE c SYS_REFCURSOR; BEGIN
                  OPEN c FOR SELECT * FROM emp; DBMS_SQL.RETURN_RESULT(c); END;""")
 table = cur.fetch_arrow_table()
 ```
+
+### Object types, collections, XMLType and SDO_GEOMETRY
+
+User-defined object types, VARRAYs and nested tables come back as **JSON
+text** — attributes keyed by name, collections as arrays, LOB attributes
+inlined, dates as ISO-8601 — so any Arrow consumer can read them without
+Oracle-specific type knowledge. `XMLType` columns come back as XML text
+and `MDSYS.SDO_GEOMETRY` as **GeoArrow WKB** (points, lines, polygons
+incl. rectangles, multi-geometries and collections, 2D/3D/4D; circular
+arcs are not supported). With `adbc.oracle.use_extension_types=true` the
+fields are annotated with Arrow extension types (`arrow.json`,
+`arrow.opaque` for XMLType, `geoarrow.wkb`) — pyarrow materialises them
+automatically:
+
+```python
+with oracle.connect(uri=uri, db_kwargs={"adbc.oracle.use_extension_types": "true"}) as conn, conn.cursor() as cur:
+    cur.execute("SELECT name, address, boundary FROM sites")   # address is an object type, boundary SDO_GEOMETRY
+    table = cur.fetch_arrow_table()
+    table.schema.field("BOUNDARY").type   # binary with geoarrow.wkb metadata -> shapely.from_wkb(...)
+```
+
+Nested Arrow columns (`list`, `struct`, `map`) are ingested as JSON text
+into `JSON` columns (21c+; `adbc.oracle.ingest.struct_type` selects
+`CLOB`, `VARCHAR2` or `BLOB` instead).
 
 ### Cancellation
 
@@ -363,6 +389,7 @@ descriptors are accepted in place of the `oracle://` form.
 | `adbc.oracle.date_mode`         | `timestamp` | `DATE` → `timestamp[s]` (keeps the time of day) or `date32`.        |
 | `adbc.oracle.batch_bytes`       | `0`       | Approximate upper bound on bytes per Arrow record batch (0 = only `batch_size` applies). |
 | `adbc.oracle.disable_oob`       | `false`   | Disable out-of-band (TCP urgent) breaks used for cancellation; falls back to in-band markers. |
+| `adbc.oracle.use_extension_types` | `false` | Annotate JSON / object (`arrow.json`), XMLType (`arrow.opaque`) and SDO_GEOMETRY (`geoarrow.wkb`) columns with Arrow extension-type metadata. |
 | `adbc.oracle.session_time_zone` | `+00:00`  | Session `TIME_ZONE`; `TIMESTAMP WITH LOCAL TIME ZONE` values are returned in it. |
 | `adbc.oracle.sdu`               | (server)  | Requested session data unit (packet size) in bytes.                   |
 | `adbc.oracle.application_name`  | (executable name) | Program name reported to the server (`V$SESSION.PROGRAM`, `CLIENT_PROGRAM_NAME`). |
@@ -492,6 +519,9 @@ Reads (`adbc.oracle.number_mode=auto`, the default):
 | `ROWID` / `UROWID`                       | `utf8`                                       |
 | `JSON` (21c+)                            | `utf8` — native OSON decoded to JSON text client-side |
 | `BOOLEAN` (23ai)                         | `bool`                                       |
+| Object types, VARRAY, nested table       | `utf8` JSON text (`arrow.json` extension with `use_extension_types`) |
+| `XMLTYPE`                                | `utf8` XML text (`arrow.opaque` extension)   |
+| `MDSYS.SDO_GEOMETRY`                     | `binary` WKB (`geoarrow.wkb` extension)      |
 
 `number_mode=decimal` maps every `NUMBER` to `decimal128` (`(38,10)` when
 the precision is unknown), `double` maps all of them to `float64`, and
@@ -512,6 +542,7 @@ Writes (bind parameters and bulk-ingest DDL):
 | `timestamp[unit]` (naive)        | `TIMESTAMP`        | `TIMESTAMP(0/3/6/9)`                   |
 | `timestamp[unit, tz]`            | `TIMESTAMP WITH TIME ZONE` (as UTC) | `TIMESTAMP(n) WITH TIME ZONE` |
 | `duration`, `month_day_nano_interval` (no months) | `INTERVAL DAY TO SECOND` | `INTERVAL DAY(9) TO SECOND(9)` |
+| `list`, `struct`, `map`          | `VARCHAR2` / `LONG` (JSON text) | `JSON` (21c+) — see `ingest.struct_type` |
 
 Empty strings are bound as NULL, matching Oracle's own `''` semantics.
 
@@ -521,10 +552,14 @@ Empty strings are bound as NULL, matching Oracle's own `''` semantics.
   servers that *require* it (`SQLNET.ENCRYPTION_SERVER=required`) refuse
   the connection with a clear error. Use TLS (`tcps`) instead — the same
   constraint python-oracledb thin mode has.
-- Object types (`CREATE TYPE`), `XMLTYPE`, `REF CURSOR` bind/column
-  values, `BFILE`, LOB-typed `OUT` binds, `VECTOR` and Advanced Queuing
-  are not supported yet (select `XMLSERIALIZE(...)`, `TO_CLOB(...)`,
-  `VECTOR_SERIALIZE(...)` etc. to read those as text).
+- `REF CURSOR` bind/column values, `BFILE`, LOB-typed `OUT` binds,
+  `VECTOR`, Advanced Queuing, objects stored in LOBs (degenerate images)
+  and SDO_GEOMETRY circular arcs / compound elements are not supported
+  yet (select `VECTOR_SERIALIZE(...)`, `SDO_UTIL.TO_WKBGEOMETRY(...)` etc.
+  to read those as text/binary). Object types are read-only: they cannot
+  be bound as parameters or written by ingest.
+- Strings inside object images are decoded as UTF-8 (AL32UTF8 databases;
+  national-character attributes as UTF-16).
 - Named time-zone regions in `TIMESTAMP WITH TIME ZONE` values are
   returned as UTC instants (offset-based zones are exact).
 - Kerberos / RADIUS / external OS authentication, DRCP pooling and

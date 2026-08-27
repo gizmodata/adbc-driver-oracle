@@ -83,6 +83,11 @@ class DatabaseOptions(enum.Enum):
     #: Set to "true" to disable out-of-band (TCP urgent) cancellation breaks.
     DISABLE_OOB = "adbc.oracle.disable_oob"
 
+    #: Set to "true" to annotate JSON / object (arrow.json), SDO_GEOMETRY
+    #: (geoarrow.wkb) and XMLType (arrow.opaque) columns with Arrow
+    #: extension-type metadata.
+    USE_EXTENSION_TYPES = "adbc.oracle.use_extension_types"
+
     #: Session TIME_ZONE (default "+00:00" so TIMESTAMP WITH LOCAL TIME
     #: ZONE values arrive as UTC).
     SESSION_TIME_ZONE = "adbc.oracle.session_time_zone"
@@ -148,6 +153,13 @@ class StatementOptions(enum.Enum):
 
     #: Column type for Arrow binary columns: RAW (default) or BLOB.
     INGEST_BINARY_TYPE = "adbc.oracle.ingest.binary_type"
+
+    #: Column type for Arrow list/struct/map columns (stored as JSON text):
+    #: JSON (default on 21c+, else CLOB), CLOB, VARCHAR2 or BLOB.
+    INGEST_STRUCT_TYPE = "adbc.oracle.ingest.struct_type"
+
+    #: Tablespace for tables created by ingest.
+    INGEST_TABLESPACE = "adbc.oracle.ingest.tablespace"
 
 
 @functools.lru_cache(maxsize=1)

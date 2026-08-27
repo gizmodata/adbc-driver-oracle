@@ -105,6 +105,7 @@ type Conn struct {
 	endToEndModified                                                             bool
 
 	connectionID string
+	objTypes     *objTypeCache
 }
 
 // Dial connects and authenticates.

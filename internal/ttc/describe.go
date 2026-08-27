@@ -15,11 +15,11 @@ func processMetadata(r *tns.ReadBuffer) Column {
 	c.Precision = r.ReadSB1()
 	c.Scale = r.ReadSB1()
 	c.BufferSize = r.ReadUB4()
-	r.SkipUB4()             // max number of array elements
-	r.SkipUB8()             // cont flags
-	r.ReadBytesWithLength() // OID
-	r.SkipUB2()             // version
-	r.SkipUB2()             // character set id
+	r.SkipUB4() // max number of array elements
+	r.SkipUB8() // cont flags
+	c.ObjectTypeOID = r.ReadBytesWithLength()
+	r.SkipUB2() // version
+	r.SkipUB2() // character set id
 	c.CSForm = r.ReadUB1()
 	c.MaxSize = r.ReadUB4()
 	if c.OraTypeNum == TypeRaw {

@@ -600,9 +600,6 @@ func (m *messageWithData) describeInto(r *tns.ReadBuffer, s *Statement) error {
 		if r.Err() != nil {
 			return r.Err()
 		}
-		if cols[i].OraTypeNum == TypeObject && cols[i].ObjectTypeName == "XMLTYPE" {
-			return fmt.Errorf("oracle: column %q: XMLTYPE columns are not supported; use XMLSERIALIZE or GETCLOBVAL()", cols[i].Name)
-		}
 		defaultFetchTypes(&cols[i])
 		switch cols[i].OraTypeNum {
 		case TypeBlob, TypeClob, TypeJSON, TypeVector:
@@ -708,7 +705,21 @@ func (m *messageWithData) processColumnData(r *tns.ReadBuffer, idx int, col *Col
 			}
 		}
 	case TypeObject:
-		return fmt.Errorf("oracle: column %q: object type columns are not supported", col.Name)
+		// Object image: toid, oid, snapshot, version, length, flags, data.
+		r.ReadBytesWithLength()
+		r.ReadBytesWithLength()
+		r.SkipBytesWithLength()
+		r.SkipUB2()
+		n := r.ReadUB4()
+		r.SkipUB2()
+		if n == 0 {
+			isNull = true
+		} else {
+			data = r.ReadRawBytesAndLength()
+			if data == nil {
+				isNull = true
+			}
+		}
 	default:
 		data = r.ReadRawBytesAndLength()
 		if data == nil {

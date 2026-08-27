@@ -117,9 +117,19 @@ without a listener on localhost:1521.
 ## Known limitations / open items
 
 - Not supported: Native Network Encryption (server must not *require*
-  it; TLS is the alternative), object types / XMLTYPE / REF CURSOR
-  values / VECTOR / BFILE / LOB-typed OUT binds, Kerberos, DRCP,
-  password-protected wallet keys.
+  it; TLS is the alternative), REF CURSOR values / VECTOR / BFILE /
+  LOB-typed OUT binds, binding or ingesting object types, Kerberos,
+  DRCP, password-protected wallet keys.
+- Object types (`internal/ttc/objtype.go`, `objimage.go`, driver
+  `objects.go`): type metadata comes from ALL_TYPES / ALL_TYPE_ATTRS /
+  ALL_COLL_TYPES (not dbms_pickler — it needs a REF CURSOR OUT bind),
+  cached per connection. Column images are buffered raw in `arrowSink`
+  and decoded in `flushObjects` when a batch is materialised, because
+  dictionary lookups can't run mid-response. BOOLEAN attrs are 4-byte
+  ints (first byte set = TRUE); LOB attributes are fetched with the LOB
+  READ op (`Conn.ReadLOB`). SDO_GEOMETRY → WKB lives in `objects.go`.
+  Spatial isn't in the slim container: use `gvenzl/oracle-free:23-faststart`
+  (`ADBC_ORACLE_SPATIAL_URI`; CI now runs that image).
 - Cancellation: `Conn.Cancel()` / ctx cancellation sends a TCP
   out-of-band byte (Unix, plain TCP; the OOB check happens right after
   ACCEPT) or an INTERRUPT marker otherwise; the server answers with

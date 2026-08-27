@@ -140,6 +140,11 @@ func (r *streamingRecordReader) Next() bool {
 		r.close()
 		return false
 	}
+	if err := r.sink.flushObjects(r.ctx, r.conn.conn); err != nil {
+		r.err = err
+		r.close()
+		return false
+	}
 	bytes := r.sink.bytes
 	rec := r.sink.newRecord()
 	if r.batchBytes > 0 && bytes > r.batchBytes && rec.NumRows() > 1 {

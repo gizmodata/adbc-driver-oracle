@@ -45,7 +45,7 @@ classifiers = [
 
 [project.optional-dependencies]
 dbapi = ["pandas"]
-test = ["pandas", "pytest >=7", "duckdb >=1.3"]
+test = ["pandas", "pytest >=7", "duckdb >=1.3", "shapely >=2.0"]
 # Oracle -> GizmoSQL streaming-ingest integration test (the customer-notebook flow).
 gizmosql = ["adbc-driver-gizmosql >=2.0"]
 

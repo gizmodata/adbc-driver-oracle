@@ -55,6 +55,7 @@ type Column struct {
 	VectorFlags      uint8
 	ObjectTypeSchema string
 	ObjectTypeName   string
+	ObjectTypeOID    []byte
 
 	// FetchType is the Oracle type the data is actually transferred as
 	// (e.g. CLOB columns are fetched as LONG). Filled in by the statement.

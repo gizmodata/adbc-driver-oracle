@@ -191,6 +191,8 @@ func (s *statementImpl) buildCreateTableSQL(schema *arrow.Schema) (string, error
 	b.WriteString(")")
 	if s.ingestTemporary {
 		b.WriteString(" ON COMMIT PRESERVE ROWS")
+	} else if s.ingestTablespace != "" {
+		b.WriteString(" TABLESPACE " + identFor(s.ingestTablespace))
 	}
 	return b.String(), nil
 }

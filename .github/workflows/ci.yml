@@ -33,7 +33,7 @@ jobs:
       oracle:
         # GitHub Actions service containers only run on Linux runners;
         # on macOS/Windows this block is ignored and integration tests skip.
-        image: ${{ startsWith(matrix.os, 'ubuntu') && 'gvenzl/oracle-free:23-slim-faststart' || '' }}
+        image: ${{ startsWith(matrix.os, 'ubuntu') && 'gvenzl/oracle-free:23-faststart' || '' }}
         env:
           ORACLE_PASSWORD: tiger
           APP_USER: scott
@@ -47,6 +47,9 @@ jobs:
           --health-retries 30
     env:
       ADBC_ORACLE_TEST_URI: ${{ startsWith(matrix.os, 'ubuntu') && 'oracle://scott:tiger@localhost:1521/FREEPDB1' || '' }}
+      # The full (non-slim) image includes Oracle Spatial, needed for the
+      # SDO_GEOMETRY -> GeoArrow tests.
+      ADBC_ORACLE_SPATIAL_URI: ${{ startsWith(matrix.os, 'ubuntu') && 'oracle://scott:tiger@localhost:1521/FREEPDB1' || '' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -80,7 +83,7 @@ jobs:
       oracle:
         # GitHub Actions service containers only run on Linux runners;
         # on macOS/Windows this block is ignored and integration tests skip.
-        image: ${{ startsWith(matrix.os, 'ubuntu') && 'gvenzl/oracle-free:23-slim-faststart' || '' }}
+        image: ${{ startsWith(matrix.os, 'ubuntu') && 'gvenzl/oracle-free:23-faststart' || '' }}
         env:
           ORACLE_PASSWORD: tiger
           APP_USER: scott
@@ -103,6 +106,9 @@ jobs:
           - 31337:31337
     env:
       ADBC_ORACLE_TEST_URI: ${{ startsWith(matrix.os, 'ubuntu') && 'oracle://scott:tiger@localhost:1521/FREEPDB1' || '' }}
+      # The full (non-slim) image includes Oracle Spatial, needed for the
+      # SDO_GEOMETRY -> GeoArrow tests.
+      ADBC_ORACLE_SPATIAL_URI: ${{ startsWith(matrix.os, 'ubuntu') && 'oracle://scott:tiger@localhost:1521/FREEPDB1' || '' }}
       # Oracle -> GizmoSQL streaming-ingest test (test-only dependency; the
       # driver itself has no GizmoSQL code).
       GIZMOSQL_URI: ${{ startsWith(matrix.os, 'ubuntu') && 'gizmosql://localhost:31337?transport=tcp' || '' }}
@@ -196,7 +202,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     services:
       oracle:
-        image: ${{ matrix.runner == 'ubuntu-latest' && 'gvenzl/oracle-free:23-slim-faststart' || '' }}
+        image: ${{ matrix.runner == 'ubuntu-latest' && 'gvenzl/oracle-free:23-faststart' || '' }}
         env:
           ORACLE_PASSWORD: tiger
           APP_USER: scott
@@ -210,6 +216,7 @@ jobs:
           --health-retries 30
     env:
       ADBC_ORACLE_TEST_URI: ${{ matrix.runner == 'ubuntu-latest' && 'oracle://scott:tiger@localhost:1521/FREEPDB1' || '' }}
+      ADBC_ORACLE_SPATIAL_URI: ${{ matrix.runner == 'ubuntu-latest' && 'oracle://scott:tiger@localhost:1521/FREEPDB1' || '' }}
     strategy:
       fail-fast: false
       matrix:

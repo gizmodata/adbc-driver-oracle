@@ -222,6 +222,9 @@ func (c *connectionImpl) SetOption(key, value string) error {
 		}
 		c.cfg.batchBytes = n
 		return nil
+	case OptionUseExtensionTypes:
+		c.cfg.types.useExtensionTypes = isTrue(value)
+		return nil
 	case "adbc.oracle.module", "adbc.oracle.action", "adbc.oracle.client_info", "adbc.oracle.client_identifier":
 		var which uint8
 		switch key {
@@ -263,6 +266,11 @@ func (c *connectionImpl) GetOption(key string) (string, error) {
 		return c.cfg.types.dateMode, nil
 	case OptionBatchBytes:
 		return strconv.FormatInt(c.cfg.batchBytes, 10), nil
+	case OptionUseExtensionTypes:
+		if c.cfg.types.useExtensionTypes {
+			return adbc.OptionValueEnabled, nil
+		}
+		return adbc.OptionValueDisabled, nil
 	}
 	return "", errStatus(adbc.StatusNotFound, "unknown connection option %q", key)
 }
@@ -292,6 +300,8 @@ type statementImpl struct {
 	ingestRawLength     int
 	ingestStringType    string
 	ingestBinaryType    string
+	ingestStructType    string
+	ingestTablespace    string
 	closed              bool
 	bound               arrow.Record
 	boundStream         array.RecordReader
@@ -387,6 +397,15 @@ func (s *statementImpl) SetOption(key, value string) error {
 		default:
 			return errStatus(adbc.StatusInvalidArgument, "invalid value %q for %s", value, key)
 		}
+	case OptionIngestStructType:
+		switch strings.ToUpper(value) {
+		case "JSON", "CLOB", "VARCHAR2", "BLOB":
+			s.ingestStructType = strings.ToUpper(value)
+		default:
+			return errStatus(adbc.StatusInvalidArgument, "invalid value %q for %s", value, key)
+		}
+	case OptionIngestTablespace:
+		s.ingestTablespace = value
 	default:
 		return errStatus(adbc.StatusNotImplemented, "unknown statement option %q", key)
 	}

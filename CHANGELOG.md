@@ -6,6 +6,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-27
+
+### Added
+
+- Object types: user-defined object types, VARRAYs and nested tables are
+  returned as JSON text (nested objects, collections, LOB attributes,
+  BOOLEAN, dates/intervals); `XMLTYPE` columns as XML text; type
+  metadata resolved from the data dictionary and cached per connection.
+- `MDSYS.SDO_GEOMETRY` columns are returned as GeoArrow WKB (points,
+  lines, polygons incl. rectangles, multi-geometries, collections,
+  2D/3D/4D).
+- `adbc.oracle.use_extension_types`: Arrow extension-type metadata
+  (`arrow.json`, `arrow.opaque` for XMLType, `geoarrow.wkb`).
+- Bulk ingest of `list` / `struct` / `map` columns as JSON
+  (`adbc.oracle.ingest.struct_type`) and `adbc.oracle.ingest.tablespace`.
+- LOB READ support in the wire layer (used for LOB attributes and
+  LOB-backed XMLType values).
+- CI runs the full `gvenzl/oracle-free:23-faststart` image (with Spatial).
+
 ## [0.2.0] - 2026-08-27
 
 ### Added
@@ -83,7 +102,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   through the c-shared driver (GizmoSQL / DuckDB are test-only
   dependencies).
 
-[Unreleased]: https://github.com/gizmodata/adbc-driver-oracle/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/gizmodata/adbc-driver-oracle/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/gizmodata/adbc-driver-oracle/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/gizmodata/adbc-driver-oracle/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/gizmodata/adbc-driver-oracle/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/gizmodata/adbc-driver-oracle/compare/v0.1.0...v0.1.1

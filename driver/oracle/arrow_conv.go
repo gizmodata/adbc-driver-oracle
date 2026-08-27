@@ -1,6 +1,7 @@
 package oracle
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"strconv"
@@ -102,6 +103,9 @@ func arrowTypeFor(c *ttc.Column, opts typeOptions) (arrow.DataType, error) {
 		return arrow.FixedWidthTypes.Boolean, nil
 	case ttc.TypeVector:
 		return nil, errStatus(adbc.StatusNotImplemented, "oracle: column %q: VECTOR columns are not supported yet; select TO_CLOB(FROM_VECTOR(col)) or VECTOR_SERIALIZE(col) instead", c.Name)
+	case ttc.TypeObject:
+		dt, _, _ := objectArrowType(c, opts.useExtensionTypes)
+		return dt, nil
 	}
 	return nil, errStatus(adbc.StatusNotImplemented, "oracle: column %q: data type %s is not supported", c.Name, c.TypeName())
 }
@@ -114,10 +118,27 @@ func schemaFor(cols []ttc.Column, opts typeOptions) *arrow.Schema {
 		if err != nil {
 			dt = arrow.BinaryTypes.String
 		}
-		md := arrow.NewMetadata([]string{"ORACLE:type"}, []string{cols[i].TypeName()})
-		fields[i] = arrow.Field{Name: cols[i].Name, Type: dt, Nullable: cols[i].NullsAllowed, Metadata: md}
+		fields[i] = arrow.Field{Name: cols[i].Name, Type: dt, Nullable: cols[i].NullsAllowed, Metadata: fieldMetadata(&cols[i], opts)}
 	}
 	return arrow.NewSchema(fields, nil)
+}
+
+// fieldMetadata builds the per-field metadata: ORACLE:type plus, when
+// enabled, Arrow extension-type annotations.
+func fieldMetadata(c *ttc.Column, opts typeOptions) arrow.Metadata {
+	keys := []string{"ORACLE:type"}
+	vals := []string{c.TypeName()}
+	if opts.useExtensionTypes {
+		switch c.OraTypeNum {
+		case ttc.TypeObject:
+			_, k, v := objectArrowType(c, true)
+			keys, vals = append(keys, k...), append(vals, v...)
+		case ttc.TypeJSON:
+			keys = append(keys, "ARROW:extension:name", "ARROW:extension:metadata")
+			vals = append(vals, "arrow.json", "")
+		}
+	}
+	return arrow.NewMetadata(keys, vals)
 }
 
 // arrowSink implements ttc.RowSink by appending wire values directly to
@@ -131,6 +152,7 @@ type arrowSink struct {
 	appenders []func(data []byte) error
 	lastRaw   [][]byte
 	lastNull  []bool
+	objects   []*objectColumnState // per column; nil for non-object columns
 	rows      int
 	bytes     int64 // approximate bytes appended to the current batch
 	err       error
@@ -153,15 +175,24 @@ func (s *arrowSink) ensure() error {
 		if err != nil {
 			return err
 		}
-		md := arrow.NewMetadata([]string{"ORACLE:type"}, []string{cols[i].TypeName()})
-		fields[i] = arrow.Field{Name: cols[i].Name, Type: dt, Nullable: cols[i].NullsAllowed, Metadata: md}
+		fields[i] = arrow.Field{Name: cols[i].Name, Type: dt, Nullable: cols[i].NullsAllowed, Metadata: fieldMetadata(&cols[i], s.opts)}
 	}
 	s.schema = arrow.NewSchema(fields, nil)
 	s.bldr = array.NewRecordBuilder(s.alloc, s.schema)
 	s.appenders = make([]func([]byte) error, len(cols))
 	s.lastRaw = make([][]byte, len(cols))
 	s.lastNull = make([]bool, len(cols))
+	s.objects = make([]*objectColumnState, len(cols))
 	for i := range cols {
+		if cols[i].OraTypeNum == ttc.TypeObject {
+			st := &objectColumnState{col: &cols[i], kind: objectKindFor(&cols[i])}
+			s.objects[i] = st
+			s.appenders[i] = func(data []byte) error {
+				st.entries = append(st.entries, objEntry{data: append([]byte(nil), data...)})
+				return nil
+			}
+			continue
+		}
 		s.appenders[i] = s.makeAppender(&cols[i], s.bldr.Field(i))
 	}
 	return nil
@@ -207,7 +238,11 @@ func (s *arrowSink) AppendNull(col int) error {
 		s.err = err
 		return err
 	}
-	s.bldr.Field(col).AppendNull()
+	if st := s.objects[col]; st != nil {
+		st.entries = append(st.entries, objEntry{null: true})
+	} else {
+		s.bldr.Field(col).AppendNull()
+	}
 	s.lastNull[col] = true
 	return nil
 }
@@ -221,8 +256,7 @@ func (s *arrowSink) AppendDuplicate(col int) error {
 		return err
 	}
 	if s.lastNull[col] {
-		s.bldr.Field(col).AppendNull()
-		return nil
+		return s.AppendNull(col)
 	}
 	if err := s.appenders[col](s.lastRaw[col]); err != nil {
 		s.err = err
@@ -619,6 +653,34 @@ func bindForArray(col arrow.Array, field arrow.Field, maxString uint32, supports
 				return oratype.EncodeIntervalDS(buf[:0], oratype.IntervalDS{Days: int32(days), Hours: int32(h), Minutes: int32(m), Seconds: int32(sec), Nanos: int32(d)}), nil
 			})
 		}}
+	case *array.List, *array.LargeList, *array.ListView, *array.FixedSizeList, *array.Struct, *array.Map:
+		// Nested values are bound as JSON text (into JSON / CLOB / VARCHAR2
+		// columns; Oracle converts textual JSON implicitly).
+		texts := make([][]byte, col.Len())
+		maxLen := 0
+		for i := 0; i < col.Len(); i++ {
+			if col.IsNull(i) {
+				continue
+			}
+			j, err := json.Marshal(col.GetOneForMarshal(i))
+			if err != nil {
+				return b, errStatus(adbc.StatusInvalidArgument, "oracle: column %q: cannot encode nested value as JSON: %v", field.Name, err)
+			}
+			texts[i] = j
+			if len(j) > maxLen {
+				maxLen = len(j)
+			}
+		}
+		b = ttc.BindColumn{OraTypeNum: ttc.TypeVarchar, CSForm: ttc.CSFormImplicit, BufferSize: uint32(max(maxLen, 1)), Value: func(i int) ([]byte, error) {
+			if texts[i] == nil {
+				return nil, nil
+			}
+			return texts[i], nil
+		}}
+		if uint32(maxLen) > maxString {
+			b.OraTypeNum = ttc.TypeLong
+			b.BufferSize = 0x7fffffff
+		}
 	default:
 		return b, errStatus(adbc.StatusNotImplemented, "oracle: cannot bind Arrow type %s (column %q)", col.DataType(), field.Name)
 	}
@@ -787,6 +849,21 @@ func oracleTypeForArrow(dt arrow.DataType, s *statementImpl, supportsBool bool) 
 		return fmt.Sprintf("TIMESTAMP(%d)", scale), nil
 	case *arrow.MonthDayNanoIntervalType, *arrow.DurationType:
 		return "INTERVAL DAY(9) TO SECOND(9)", nil
+	case *arrow.ListType, *arrow.LargeListType, *arrow.ListViewType, *arrow.FixedSizeListType, *arrow.StructType, *arrow.MapType:
+		switch s.ingestStructType {
+		case "CLOB":
+			return "CLOB", nil
+		case "VARCHAR2":
+			return fmt.Sprintf("VARCHAR2(%d)", varcharLen), nil
+		case "BLOB":
+			return "BLOB", nil
+		case "JSON":
+			return "JSON", nil
+		}
+		if s.conn.conn.ServerVersion()[0] >= 21 {
+			return "JSON", nil
+		}
+		return "CLOB", nil
 	}
 	return "", fmt.Errorf("unsupported Arrow type %s", dt)
 }

@@ -75,13 +75,17 @@ func liveConfig(t *testing.T) *Config {
 	if host == "" {
 		host = "localhost"
 	}
-	conn, err := net.DialTimeout("tcp", host+":1521", 2*time.Second)
+	port := 1521
+	if p := os.Getenv("ORACLE_TEST_PORT"); p != "" {
+		port, _ = strconv.Atoi(p)
+	}
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", host, port), 2*time.Second)
 	if err != nil {
-		t.Skipf("no Oracle listener at %s:1521: %v", host, err)
+		t.Skipf("no Oracle listener at %s:%d: %v", host, port, err)
 	}
 	conn.Close()
 	cfg := &Config{
-		Addresses:   []Address{{Host: host, Port: 1521}},
+		Addresses:   []Address{{Host: host, Port: port}},
 		ServiceName: "FREEPDB1",
 		Username:    "scott",
 		Password:    "tiger",

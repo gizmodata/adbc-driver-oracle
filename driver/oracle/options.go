@@ -75,6 +75,10 @@ const (
 	// OptionDisableOOB disables out-of-band (TCP urgent data) breaks used
 	// for statement cancellation.
 	OptionDisableOOB = "adbc.oracle.disable_oob"
+	// OptionUseExtensionTypes annotates JSON, object (arrow.json),
+	// SDO_GEOMETRY (geoarrow.wkb) and XMLType (arrow.opaque) columns with
+	// Arrow extension-type metadata.
+	OptionUseExtensionTypes = "adbc.oracle.use_extension_types"
 	// OptionNumberMode controls how NUMBER columns map to Arrow:
 	// "auto" (default: int64 / decimal128 / float64 by precision and
 	// scale), "decimal" (decimal128 wherever possible), "double", "string".
@@ -90,6 +94,8 @@ const (
 	OptionIngestRawLength     = "adbc.oracle.ingest.raw_length"
 	OptionIngestStringType    = "adbc.oracle.ingest.string_type" // VARCHAR2 (default) or CLOB
 	OptionIngestBinaryType    = "adbc.oracle.ingest.binary_type" // RAW (default) or BLOB
+	OptionIngestStructType    = "adbc.oracle.ingest.struct_type" // JSON (default on 21c+), CLOB, VARCHAR2, BLOB
+	OptionIngestTablespace    = "adbc.oracle.ingest.tablespace"
 
 	OptionIngestTable = adbc.OptionKeyIngestTargetTable
 )
@@ -117,9 +123,10 @@ const (
 
 // typeOptions collects the Arrow mapping policies.
 type typeOptions struct {
-	numberMode   string
-	intervalMode string
-	dateMode     string
+	numberMode        string
+	intervalMode      string
+	dateMode          string
+	useExtensionTypes bool
 }
 
 func parseIntervalMode(v string) (string, error) {
@@ -249,6 +256,8 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 			cfg.batchBytes = n
 		case "disable_oob":
 			cfg.ttc.DisableOOB = isTrue(v)
+		case "use_extension_types":
+			cfg.types.useExtensionTypes = isTrue(v)
 		case "sdu":
 			n, err := strconv.Atoi(v)
 			if err != nil || n < 512 {
@@ -434,6 +443,8 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 			cfg.batchBytes = n
 		case OptionDisableOOB:
 			cfg.ttc.DisableOOB = isTrue(v)
+		case OptionUseExtensionTypes:
+			cfg.types.useExtensionTypes = isTrue(v)
 		case OptionSDU:
 			n, err := strconv.Atoi(v)
 			if err != nil || n < 512 {
