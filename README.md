@@ -336,6 +336,37 @@ Nested Arrow columns (`list`, `struct`, `map`) are ingested as JSON text
 into `JSON` columns (21c+; `adbc.oracle.ingest.struct_type` selects
 `CLOB`, `VARCHAR2` or `BLOB` instead).
 
+### Native Network Encryption (NNE)
+
+The driver speaks Oracle's Advanced Networking Option, so it works with
+servers that **require** Native Network Encryption and/or data integrity
+checksumming — no Oracle Client and no TLS certificate wrangling. After
+the connect handshake it runs the encryption / checksum negotiation
+(Diffie-Hellman key exchange) and then AES-encrypts and checksums every
+packet.
+
+It is on by default at `accepted`: nothing changes for a server that
+doesn't ask for it, and a server that requires it is transparently
+negotiated (AES-256 / SHA-512 in the common case). Force it with
+`adbc.oracle.nne=required` to guarantee the session is encrypted, or turn
+it off with `rejected`:
+
+```python
+# Just works against a server with SQLNET.ENCRYPTION_SERVER=REQUIRED:
+with oracle.connect(uri="oracle://user:pw@exadata-scan:1521/PROD") as conn, conn.cursor() as cur:
+    cur.execute("SELECT * FROM sales.orders")   # every packet AES-encrypted + checksummed
+
+# Refuse to connect unless the channel is encrypted:
+oracle.connect(uri=uri, db_kwargs={"adbc.oracle.nne": "required"})
+```
+
+Supported: AES-128/192/256 encryption and MD5 / SHA-1 / SHA-256 / SHA-384
+/ SHA-512 checksums (the driver offers only AES ciphers; legacy RC4/DES
+are never used). Kerberos / RADIUS network authentication is not
+supported — use password, TLS or token auth. Over a `tcps` (TLS)
+connection NNE stays off by default since the channel is already
+encrypted.
+
 ### Cancellation
 
 `cursor.adbc_cancel()` (or a cancelled/expired `context.Context` in Go)
@@ -387,6 +418,10 @@ descriptors are accepted in place of the `oracle://` form.
 | `adbc.oracle.date_mode`         | `timestamp` | `DATE` → `timestamp[s]` (keeps the time of day) or `date32`.        |
 | `adbc.oracle.batch_bytes`       | `0`       | Approximate upper bound on bytes per Arrow record batch (0 = only `batch_size` applies). |
 | `adbc.oracle.disable_oob`       | `false`   | Disable out-of-band (TCP urgent) breaks used for cancellation; falls back to in-band markers. |
+| `adbc.oracle.nne`               | `accepted` | Native Network Encryption / data integrity: `accepted`, `requested`, `required`, `rejected`. |
+| `adbc.oracle.nne_checksum`      | (=`nne`)  | Data-integrity level, if different from `nne`.                        |
+| `adbc.oracle.nne_encryption_algorithms` | (all AES) | Comma-separated encryption preference, e.g. `AES256,AES192`. |
+| `adbc.oracle.nne_checksum_algorithms`   | (all)     | Comma-separated checksum preference, e.g. `SHA512,SHA256`. |
 | `adbc.oracle.use_extension_types` | `false` | Annotate JSON / object (`arrow.json`), XMLType (`arrow.opaque`) and SDO_GEOMETRY (`geoarrow.wkb`) columns with Arrow extension-type metadata. |
 | `adbc.oracle.session_time_zone` | `+00:00`  | Session `TIME_ZONE`; `TIMESTAMP WITH LOCAL TIME ZONE` values are returned in it. |
 | `adbc.oracle.sdu`               | (server)  | Requested session data unit (packet size) in bytes.                   |
@@ -546,10 +581,9 @@ Empty strings are bound as NULL, matching Oracle's own `''` semantics.
 
 ## Limitations
 
-- **Native Network Encryption / checksumming (ANO)** is not implemented;
-  servers that *require* it (`SQLNET.ENCRYPTION_SERVER=required`) refuse
-  the connection with a clear error. Use TLS (`tcps`) instead — the same
-  constraint python-oracledb thin mode has.
+- **Kerberos / RADIUS** network authentication is not supported (use
+  password, TLS, wallet or token auth). Native Network Encryption *is*
+  supported (see [above](#native-network-encryption-nne)).
 - `REF CURSOR` bind/column values, `BFILE`, LOB-typed `OUT` binds,
   `VECTOR`, Advanced Queuing, objects stored in LOBs (degenerate images)
   and SDO_GEOMETRY circular arcs / compound elements are not supported
@@ -572,7 +606,7 @@ Empty strings are bound as NULL, matching Oracle's own `''` semantics.
 adbc-driver-oracle/
 ├── go.mod, go.sum
 ├── internal/
-│   ├── tns/         — TNS packet framing (CONNECT/ACCEPT/REDIRECT/DATA/MARKER), TLS, SDU negotiation
+│   ├── tns/         — TNS packets (CONNECT/ACCEPT/REDIRECT/DATA/MARKER), TLS, SDU, Native Network Encryption (ANO)
 │   ├── ttc/         — TTC message layer: protocol/data-type negotiation, O5LOGON auth, cursors, fetch
 │   └── oratype/     — NUMBER / DATE / TIMESTAMP / INTERVAL / ROWID / OSON (JSON) codecs
 ├── driver/oracle/   — pure-Go ADBC Driver/Database/Connection/Statement impl

@@ -14,6 +14,7 @@ import (
 
 	"github.com/apache/arrow-adbc/go/adbc"
 
+	"github.com/gizmodata/adbc-driver-oracle/internal/tns"
 	"github.com/gizmodata/adbc-driver-oracle/internal/ttc"
 )
 
@@ -75,6 +76,20 @@ const (
 	// OptionDisableOOB disables out-of-band (TCP urgent data) breaks used
 	// for statement cancellation.
 	OptionDisableOOB = "adbc.oracle.disable_oob"
+	// OptionNNE controls Native Network Encryption / data integrity
+	// (Oracle Advanced Networking): "accepted" (default — negotiate if the
+	// server asks), "requested", "required" (fail if the server won't
+	// encrypt), or "rejected"/"off" (never negotiate).
+	OptionNNE = "adbc.oracle.nne"
+	// OptionNNEChecksum controls the data-integrity level independently of
+	// encryption (same values as OptionNNE); defaults to follow OptionNNE.
+	OptionNNEChecksum = "adbc.oracle.nne_checksum"
+	// OptionNNEEncryptionAlgorithms restricts the offered encryption
+	// algorithms (comma-separated, e.g. "AES256,AES192").
+	OptionNNEEncryptionAlgorithms = "adbc.oracle.nne_encryption_algorithms"
+	// OptionNNEChecksumAlgorithms restricts the offered checksum algorithms
+	// (comma-separated, e.g. "SHA256,SHA512").
+	OptionNNEChecksumAlgorithms = "adbc.oracle.nne_checksum_algorithms"
 	// OptionUseExtensionTypes annotates JSON, object (arrow.json),
 	// SDO_GEOMETRY (geoarrow.wkb) and XMLType (arrow.opaque) columns with
 	// Arrow extension-type metadata.
@@ -159,6 +174,12 @@ type connConfig struct {
 	prefetchRows int
 	trace        bool
 	types        typeOptions
+	nneEnc       int
+	nneChk       int
+	nneEncSet    bool
+	nneChkSet    bool
+	nneEncAlgos  []string
+	nneChkAlgos  []string
 }
 
 var easyConnectRe = regexp.MustCompile(`^(?:(tcps?)://)?([^:/]+)(?::(\d+))?/([^?:]+)(?::([A-Za-z]+))?(?:\?(.*))?$`)
@@ -258,6 +279,24 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 			cfg.ttc.DisableOOB = isTrue(v)
 		case "use_extension_types":
 			cfg.types.useExtensionTypes = isTrue(v)
+		case "nne", "encryption":
+			l, err := parseNNELevel(v)
+			if err != nil {
+				return err
+			}
+			cfg.nneEnc = l
+			cfg.nneEncSet = true
+		case "nne_checksum", "data_integrity":
+			l, err := parseNNELevel(v)
+			if err != nil {
+				return err
+			}
+			cfg.nneChk = l
+			cfg.nneChkSet = true
+		case "nne_encryption_algorithms":
+			cfg.nneEncAlgos = splitCSV(v)
+		case "nne_checksum_algorithms":
+			cfg.nneChkAlgos = splitCSV(v)
 		case "sdu":
 			n, err := strconv.Atoi(v)
 			if err != nil || n < 512 {
@@ -445,6 +484,24 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 			cfg.ttc.DisableOOB = isTrue(v)
 		case OptionUseExtensionTypes:
 			cfg.types.useExtensionTypes = isTrue(v)
+		case OptionNNE:
+			l, err := parseNNELevel(v)
+			if err != nil {
+				return nil, err
+			}
+			cfg.nneEnc = l
+			cfg.nneEncSet = true
+		case OptionNNEChecksum:
+			l, err := parseNNELevel(v)
+			if err != nil {
+				return nil, err
+			}
+			cfg.nneChk = l
+			cfg.nneChkSet = true
+		case OptionNNEEncryptionAlgorithms:
+			cfg.nneEncAlgos = splitCSV(v)
+		case OptionNNEChecksumAlgorithms:
+			cfg.nneChkAlgos = splitCSV(v)
 		case OptionSDU:
 			n, err := strconv.Atoi(v)
 			if err != nil || n < 512 {
@@ -510,7 +567,41 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 			cfg.ttc.Addresses[i].Protocol = "tcps"
 		}
 	}
+	// Native Network Encryption: enabled by default at "accepted" over plain
+	// TCP (over TLS the channel is already encrypted, so it stays off unless
+	// explicitly requested).
+	encLevel := cfg.nneEnc
+	if !cfg.nneEncSet {
+		if cfg.ttc.TLS == nil {
+			encLevel = tns.LevelAccepted
+		} else {
+			encLevel = tns.LevelRejected
+		}
+	}
+	chkLevel := cfg.nneChk
+	if !cfg.nneChkSet {
+		chkLevel = encLevel
+	}
+	if encLevel != tns.LevelRejected || chkLevel != tns.LevelRejected {
+		cfg.ttc.ANO = &tns.ANOConfig{
+			EncryptionLevel: encLevel,
+			ChecksumLevel:   chkLevel,
+			Encryption:      cfg.nneEncAlgos,
+			Checksum:        cfg.nneChkAlgos,
+		}
+	}
 	return cfg, nil
+}
+
+func splitCSV(v string) []string {
+	parts := strings.Split(v, ",")
+	out := parts[:0]
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // parseDescriptor extracts addresses and connect data from a
@@ -635,6 +726,20 @@ func parseMode(v string) (uint32, error) {
 		return 0x8000000, nil
 	}
 	return 0, errStatus(adbc.StatusInvalidArgument, "oracle: unknown mode %q", v)
+}
+
+func parseNNELevel(v string) (int, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "accepted":
+		return tns.LevelAccepted, nil
+	case "requested":
+		return tns.LevelRequested, nil
+	case "required":
+		return tns.LevelRequired, nil
+	case "rejected", "off", "disabled", "none":
+		return tns.LevelRejected, nil
+	}
+	return 0, errStatus(adbc.StatusInvalidArgument, "oracle: unknown NNE level %q (accepted|requested|required|rejected)", v)
 }
 
 func parseNumberMode(v string) (string, error) {

@@ -26,7 +26,19 @@ type Transport struct {
 	readTimeout    time.Duration
 	hdr            [PacketHeaderSize]byte
 	writeMu        sync.Mutex
+	security       *Security
 }
+
+// SetSecurity activates packet encryption / checksumming for all
+// subsequent DATA packets.
+func (t *Transport) SetSecurity(s *Security) { t.security = s }
+
+// Security returns the negotiated packet protection (nil if none).
+func (t *Transport) Security() *Security { return t.security }
+
+// dataPayloadOffset is where a DATA packet's payload starts (8-byte
+// header + 2-byte data flags).
+const dataPayloadOffset = PacketHeaderSize + 2
 
 // NewTransport wraps an established socket.
 func NewTransport(conn net.Conn) *Transport {
@@ -127,6 +139,17 @@ func (t *Transport) ReadPacket() (*Packet, error) {
 		t.closed = true
 		return nil, t.wrapErr(err)
 	}
+	if t.security.Active() && buf[4] == PacketTypeData && len(buf) > dataPayloadOffset+1 {
+		plain, err := t.security.unwrap(buf[dataPayloadOffset:])
+		if err != nil {
+			t.closed = true
+			return nil, err
+		}
+		nb := make([]byte, dataPayloadOffset+len(plain))
+		copy(nb, buf[:dataPayloadOffset])
+		copy(nb[dataPayloadOffset:], plain)
+		buf = nb
+	}
 	p := &Packet{Type: buf[4], Flags: buf[5], Buf: buf}
 	if t.Trace != nil {
 		t.Trace("recv packet type=%d flags=%#x size=%d\n%s", p.Type, p.Flags, size, hexDump(buf))
@@ -141,6 +164,21 @@ func (t *Transport) WritePacket(data []byte) error {
 	}
 	if t.Trace != nil {
 		t.Trace("send packet type=%d size=%d\n%s", data[4], len(data), hexDump(data))
+	}
+	if t.security.Active() && data[4] == PacketTypeData && len(data) >= dataPayloadOffset {
+		wrapped, err := t.security.wrap(data[dataPayloadOffset:])
+		if err != nil {
+			return err
+		}
+		nb := make([]byte, dataPayloadOffset+len(wrapped))
+		copy(nb, data[:dataPayloadOffset])
+		copy(nb[dataPayloadOffset:], wrapped)
+		if t.fullPacketSize {
+			binary.BigEndian.PutUint32(nb[0:], uint32(len(nb)))
+		} else {
+			binary.BigEndian.PutUint16(nb[0:], uint16(len(nb)))
+		}
+		data = nb
 	}
 	t.writeMu.Lock()
 	defer t.writeMu.Unlock()

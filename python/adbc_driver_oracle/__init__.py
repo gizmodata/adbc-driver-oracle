@@ -83,6 +83,19 @@ class DatabaseOptions(enum.Enum):
     #: Set to "true" to disable out-of-band (TCP urgent) cancellation breaks.
     DISABLE_OOB = "adbc.oracle.disable_oob"
 
+    #: Native Network Encryption / data integrity level: "accepted"
+    #: (default), "requested", "required" or "rejected".
+    NNE = "adbc.oracle.nne"
+
+    #: Data-integrity (checksum) level, if different from NNE.
+    NNE_CHECKSUM = "adbc.oracle.nne_checksum"
+
+    #: Comma-separated encryption-algorithm preference (e.g. "AES256").
+    NNE_ENCRYPTION_ALGORITHMS = "adbc.oracle.nne_encryption_algorithms"
+
+    #: Comma-separated checksum-algorithm preference (e.g. "SHA512").
+    NNE_CHECKSUM_ALGORITHMS = "adbc.oracle.nne_checksum_algorithms"
+
     #: Set to "true" to annotate JSON / object (arrow.json), SDO_GEOMETRY
     #: (geoarrow.wkb) and XMLType (arrow.opaque) columns with Arrow
     #: extension-type metadata.

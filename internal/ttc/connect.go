@@ -19,18 +19,25 @@ type connectMessage struct {
 	port          int
 	serviceName   string
 	sid           string
+	allowANO      bool
 
 	redirectData        string
 	redirectDataLen     uint16
 	readRedirectDataLen bool
 	refuseMessage       string
 	accepted            bool
+	naRequired          bool
 }
 
 func (m *connectMessage) write(w *tns.WriteBuffer) {
 	serviceOptions := tns.GSODontCare
 	var connectFlags1, connectFlags2 uint32
 	nsiFlags := tns.NSISupportSecurityRen | tns.NSIDisableNA
+	if m.allowANO {
+		// Enable Advanced Networking so the server drives the encryption /
+		// checksum negotiation (only done on the second, NNE, pass).
+		nsiFlags = tns.NSISupportSecurityRen
+	}
 	if w.Caps().SupportsOOB {
 		serviceOptions |= tns.GSOCanRecvAttention
 		connectFlags2 |= tns.CheckOOB
@@ -93,7 +100,9 @@ func (m *connectMessage) processPacket(r *tns.ReadBuffer) error {
 		r.SkipRawBytes(10)
 		flags1 := r.ReadUB1()
 		if flags1&tns.NSINARequired != 0 {
-			return fmt.Errorf("oracle: Native Network Encryption and Data Integrity is not supported by this driver; configure the server with SQLNET.ENCRYPTION_SERVER=rejected/accepted or use TLS (tcps)")
+			// The connection layer decides whether to negotiate ANO, retry
+			// with it enabled, or fail with a helpful error.
+			m.naRequired = true
 		}
 		r.SkipRawBytes(9)
 		r.Caps().SDU = r.ReadUint32BE()

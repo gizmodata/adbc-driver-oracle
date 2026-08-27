@@ -116,10 +116,27 @@ without a listener on localhost:1521.
 
 ## Known limitations / open items
 
-- Not supported: Native Network Encryption (server must not *require*
-  it; TLS is the alternative), REF CURSOR values / VECTOR / BFILE /
-  LOB-typed OUT binds, binding or ingesting object types, Kerberos,
-  DRCP, password-protected wallet keys.
+- Not supported: REF CURSOR values / VECTOR / BFILE / LOB-typed OUT
+  binds, binding or ingesting object types, Kerberos/RADIUS network
+  auth, DRCP, password-protected wallet keys.
+- Native Network Encryption (`internal/tns/ano.go`, `security.go`):
+  ANO negotiation runs after ACCEPT when the server sets the NA-required
+  flag. Two-phase connect — first pass sends DisableNA (proven safe for
+  all servers, zero regression); if the ACCEPT reports NA-required and
+  the user allows NNE, close and reconnect with NA enabled, run the ANO
+  negotiation (DH key exchange), then install packet AES-CBC + keyed-hash
+  protection on the transport. Must reset `caps` before the retry so the
+  fresh CONNECT is 2-byte-framed. The checksum keystream evolves per DATA
+  packet and re-inits at every marker/reset boundary (`Security.Reset()`
+  in `Conn.reset()`, *before* any post-reset packet is read/unwrapped) —
+  getting that ordering wrong desyncs on the first error. Markers/control
+  packets are never encrypted. **OOB breaks are disabled for the whole NNE
+  pass** — a raw TCP urgent byte bypasses the encrypted channel and Oracle
+  Cloud resets/hangs on it (found against a live OCI 26ai EE server; the
+  local slim container tolerated it, so this needs a real cloud server to
+  reproduce). Cancellation over NNE uses in-band interrupt markers. Local
+  NNE-required container: add a `sqlnet.ora` via the image init hook.
+  Verified end-to-end against Oracle Cloud 26ai EE (AES256/SHA256).
 - Object types (`internal/ttc/objtype.go`, `objimage.go`, driver
   `objects.go`): type metadata comes from ALL_TYPES / ALL_TYPE_ATTRS /
   ALL_COLL_TYPES (not dbms_pickler — it needs a REF CURSOR OUT bind),

@@ -41,7 +41,7 @@ func (w *WriteBuffer) SetPacketSent(v bool) { w.packetSent = v }
 
 // SizeForSDU resizes the buffer to the negotiated SDU.
 func (w *WriteBuffer) SizeForSDU() {
-	w.maxSize = int(w.caps.SDU)
+	w.maxSize = int(w.caps.SDU) - w.transport.Security().Overhead()
 	if cap(w.data) < w.maxSize {
 		w.data = make([]byte, w.maxSize)
 	}

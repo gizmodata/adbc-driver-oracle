@@ -6,6 +6,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-27
+
+### Added
+
+- Native Network Encryption (Oracle Advanced Networking Option): the
+  driver negotiates packet encryption and data-integrity checksumming
+  (Diffie-Hellman key exchange, AES-128/192/256 + MD5/SHA-1/SHA-256/
+  SHA-384/SHA-512) and works with servers that *require* NNE — no Oracle
+  Client, no TLS certificates. On by default at `accepted` (transparent
+  when the server does not ask for it); `adbc.oracle.nne` =
+  `accepted`/`requested`/`required`/`rejected`, with
+  `adbc.oracle.nne_checksum` and `adbc.oracle.nne_{encryption,checksum}_algorithms`.
+
 ## [0.3.0] - 2026-08-27
 
 ### Added
@@ -102,7 +115,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   through the c-shared driver (GizmoSQL / DuckDB are test-only
   dependencies).
 
-[Unreleased]: https://github.com/gizmodata/adbc-driver-oracle/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/gizmodata/adbc-driver-oracle/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/gizmodata/adbc-driver-oracle/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/gizmodata/adbc-driver-oracle/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/gizmodata/adbc-driver-oracle/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/gizmodata/adbc-driver-oracle/compare/v0.1.1...v0.1.2

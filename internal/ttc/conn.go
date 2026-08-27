@@ -50,6 +50,12 @@ type Config struct {
 	// cancellation then falls back to in-band markers).
 	DisableOOB bool
 
+	// ANO configures Native Network Encryption / data integrity. When
+	// EncryptionLevel or ChecksumLevel is >= levelAccepted (0) the driver
+	// participates in the Advanced Networking negotiation. Nil disables it
+	// (the server must then not require NNE).
+	ANO *tns.ANOConfig
+
 	// Trace, if set, receives protocol-level debug output.
 	Trace func(format string, args ...any)
 }
@@ -133,7 +139,27 @@ func Dial(ctx context.Context, cfg *Config) (*Conn, error) {
 
 	var lastErr error
 	for i, addr := range cfg.Addresses {
-		err := c.connectAddress(ctx, addr)
+		err := c.connectAddress(ctx, addr, false)
+		if errors.Is(err, errRetryWithANO) {
+			// The server requires Native Network Encryption: reconnect to
+			// the same address with ANO enabled and negotiate it. Reset the
+			// negotiated capabilities so the fresh CONNECT packet is framed
+			// as an initial handshake (2-byte length, no protocol version).
+			if c.transport != nil {
+				_ = c.transport.Close()
+				c.transport = nil
+			}
+			c.caps = tns.NewCapabilities()
+			// The NNE pass must not advertise out-of-band breaks: a raw TCP
+			// urgent byte bypasses the encrypted packet channel and servers
+			// (e.g. Oracle Cloud) reject or hang on it. Cancellation over
+			// NNE falls back to in-band interrupt markers.
+			c.caps.SupportsOOB = false
+			if cfg.SDU > 0 {
+				c.caps.SDU = cfg.SDU
+			}
+			err = c.connectAddress(ctx, addr, true)
+		}
 		if err == nil {
 			lastErr = nil
 			break
@@ -161,6 +187,11 @@ func Dial(ctx context.Context, cfg *Config) (*Conn, error) {
 	c.inConnect = false
 	return c, nil
 }
+
+var (
+	errRetryWithANO = errors.New("oracle: retry connection with Native Network Encryption")
+	errNNERequired  = &Error{Code: 12660, Message: "ORA-12660: the server requires Native Network Encryption / data integrity; enable it with adbc.oracle.nne=accepted (or higher), or connect over TLS (tcps)"}
+)
 
 func fillDefaults(cfg *Config) {
 	if cfg.ConnectTimeout == 0 {
@@ -267,8 +298,10 @@ func (c *Conn) dialTCP(ctx context.Context, addr Address) error {
 }
 
 // connectAddress performs the TNS connect handshake to one address,
-// following listener redirects.
-func (c *Conn) connectAddress(ctx context.Context, addr Address) error {
+// following listener redirects. allowANO enables Native Network
+// Encryption negotiation (used on the second pass once the server has
+// told us it requires it).
+func (c *Conn) connectAddress(ctx context.Context, addr Address, allowANO bool) error {
 	if err := c.dialTCP(ctx, addr); err != nil {
 		return err
 	}
@@ -283,6 +316,7 @@ func (c *Conn) connectAddress(ctx context.Context, addr Address) error {
 			port:          addr.Port,
 			serviceName:   c.cfg.ServiceName,
 			sid:           c.cfg.SID,
+			allowANO:      allowANO,
 		}
 		m.init(c, 0)
 		c.rbuf.ResetPackets()
@@ -318,6 +352,20 @@ func (c *Conn) connectAddress(ctx context.Context, addr Address) error {
 		if m.accepted {
 			c.transport.SetMaxPacketSize(int(c.caps.SDU))
 			c.wbuf.SizeForSDU()
+			if m.naRequired && !allowANO {
+				// The server requires Native Network Encryption but this
+				// pass negotiated with NA disabled. Signal the caller to
+				// retry with ANO enabled.
+				if c.cfg.ANO == nil {
+					return errNNERequired
+				}
+				return errRetryWithANO
+			}
+			if allowANO {
+				if err := c.negotiateANO(); err != nil {
+					return err
+				}
+			}
 			return nil
 		}
 		if addr.Protocol == "tcps" && c.rbuf.CurrentPacket().Flags&tns.PacketFlagTLSReneg != 0 {
@@ -361,6 +409,33 @@ func parseRedirectAddress(desc string) (Address, error) {
 	}
 	a.Protocol = strings.ToLower(get("PROTOCOL"))
 	return a, nil
+}
+
+// negotiateANO runs the Advanced Networking (NNE) negotiation right after
+// ACCEPT and installs packet encryption / checksumming on the transport.
+func (c *Conn) negotiateANO(ctx0 ...context.Context) error {
+	cfg := c.cfg.ANO
+	if cfg == nil {
+		return fmt.Errorf("oracle: server requested Native Network Encryption but it is disabled")
+	}
+	ano := tns.NewANO(c.transport, c.rbuf, c.wbuf, c.caps, *cfg)
+	sec, err := ano.Negotiate()
+	if err != nil {
+		return err
+	}
+	if sec.Active() {
+		c.transport.SetSecurity(sec)
+		c.wbuf.SizeForSDU()
+		// Out-of-band breaks send a raw TCP urgent byte that bypasses the
+		// encrypted/checksummed packet channel; servers reject that once
+		// Native Network Encryption is active. Fall back to in-band
+		// interrupt markers for cancellation.
+		c.caps.SupportsOOB = false
+		if c.cfg.Trace != nil {
+			c.cfg.Trace("Native Network Encryption active: encryption=%d checksum=%d", sec.EncryptionID, sec.ChecksumID)
+		}
+	}
+	return nil
 }
 
 func (c *Conn) authenticate(ctx context.Context) error {
@@ -487,6 +562,15 @@ func (c *Conn) receivePacket(m *baseMessage, checkRequestBoundary bool) error {
 func (c *Conn) reset() error {
 	c.rbuf.ClearErr()
 	c.sendMarker(tns.MarkerTypeReset)
+	// Native Network Encryption re-initialises the checksum keystream at
+	// the reset boundary (matching the server), so the post-reset packets
+	// validate against a fresh keystream. This must happen before any
+	// post-reset DATA packet is read (and hence unwrapped) below.
+	if sec := c.transport.Security(); sec.Active() {
+		if err := sec.Reset(); err != nil {
+			return err
+		}
+	}
 	r := c.rbuf
 	for {
 		p := r.CurrentPacket()
