@@ -11,9 +11,11 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gizmodata/adbc-driver-oracle/internal/tns"
@@ -44,9 +46,15 @@ type Config struct {
 	CurrentSchema    string
 	ExtraConnectData map[string]string
 
+	// DisableOOB turns off out-of-band break support (statement
+	// cancellation then falls back to in-band markers).
+	DisableOOB bool
+
 	// Trace, if set, receives protocol-level debug output.
 	Trace func(format string, args ...any)
 }
+
+func tnsOOBSupported() bool { return runtime.GOOS != "windows" }
 
 // Address is one listener endpoint.
 type Address struct {
@@ -70,6 +78,7 @@ type Conn struct {
 
 	txnInProgress   bool
 	breakInProgress bool
+	breakSent       atomic.Bool
 
 	// session info
 	sessionID             uint32
@@ -111,7 +120,9 @@ func Dial(ctx context.Context, cfg *Config) (*Conn, error) {
 	}
 	fillDefaults(cfg)
 	c := &Conn{cfg: cfg, caps: tns.NewCapabilities(), inConnect: true}
-	c.caps.SupportsOOB = false // out-of-band breaks are never used
+	// Out-of-band (TCP urgent) breaks are the only reliable way to cancel
+	// a running call; they are available on plain TCP on Unix platforms.
+	c.caps.SupportsOOB = cfg.TLS == nil && !cfg.DisableOOB && tnsOOBSupported()
 	if cfg.SDU > 0 {
 		c.caps.SDU = cfg.SDU
 	}
@@ -353,6 +364,19 @@ func parseRedirectAddress(desc string) (Address, error) {
 
 func (c *Conn) authenticate(ctx context.Context) error {
 	cfg := c.cfg
+	if c.caps.SupportsOOB && !c.transport.OOBSupported() {
+		c.caps.SupportsOOB = false
+	}
+	// If OOB is possible, send an urgent byte followed by a reset marker
+	// so the server can tell us (via a control packet) if it does not
+	// understand out-of-band data.
+	if c.caps.SupportsOOB && c.caps.SupportsOOBCheck {
+		if err := c.transport.SendOOB(); err != nil {
+			c.caps.SupportsOOB = false
+		} else {
+			c.sendMarker(tns.MarkerTypeReset)
+		}
+	}
 	protocol := &protocolMessage{}
 	protocol.init(c, 0)
 	dataTypes := &dataTypesMessage{}
@@ -496,9 +520,97 @@ func (c *Conn) sendMarker(markerType uint8) {
 
 // processMessage sends a request and processes the complete response.
 func (c *Conn) processMessage(m message) error {
+	return c.processMessageCtx(context.Background(), m)
+}
+
+// sendBreak sends a break marker from another goroutine (statement
+// cancellation). The server answers with a reset marker which the
+// reading goroutine handles via reset().
+func (c *Conn) sendBreak() {
+	if c.transport == nil || !c.transport.Connected() || c.inConnect {
+		return
+	}
+	if c.breakSent.Swap(true) {
+		return
+	}
+	if c.caps.SupportsOOB {
+		if err := c.transport.SendOOB(); err == nil {
+			return
+		}
+	}
+	w := tns.NewWriteBuffer(c.transport, c.caps)
+	w.StartRequest(tns.PacketTypeMarker, 0, 0)
+	w.WriteUint8(1)
+	w.WriteUint8(0)
+	w.WriteUint8(tns.MarkerTypeInterrupt)
+	_ = w.EndRequest()
+}
+
+// Cancel interrupts the call currently in progress on the connection
+// (safe to call from another goroutine). The interrupted call returns
+// ORA-01013.
+func (c *Conn) Cancel() { c.sendBreak() }
+
+// watchContext sends a break when ctx is cancelled while a round trip
+// is in progress. The returned func stops the watcher.
+func (c *Conn) watchContext(ctx context.Context) func() {
+	if ctx == nil || ctx.Done() == nil {
+		return func() {}
+	}
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			c.sendBreak()
+		case <-done:
+		}
+	}()
+	return func() { close(done) }
+}
+
+// processMessageCtx is processMessage with cancellation support: if ctx
+// is cancelled mid round trip a break is sent and ctx.Err() is returned.
+func (c *Conn) processMessageCtx(ctx context.Context, m message) error {
 	if c.transport == nil || !c.transport.Connected() {
 		return tns.ErrConnectionClosed
 	}
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	stop := c.watchContext(ctx)
+	err := c.processMessageLocked(m)
+	stop()
+	if c.breakSent.Load() {
+		// A break went out. Follow python-oracledb: with OOB the urgent
+		// byte is followed by an interrupt marker, and the server's
+		// marker/error response is consumed so the next request starts
+		// clean (it may already have been handled by the reset above).
+		if c.transport.Connected() && !errors.Is(err, tns.ErrConnectionClosed) {
+			if c.caps.SupportsOOB {
+				c.sendMarker(tns.MarkerTypeInterrupt)
+			}
+			if err == nil {
+				if rerr := c.receivePacket(m.base(), false); rerr == nil {
+					_ = process(m, c.rbuf)
+				}
+			}
+		}
+		c.breakSent.Store(false)
+		if ctx != nil && ctx.Err() != nil {
+			return fmt.Errorf("%w: %v", ctx.Err(), errOrCancelled(err))
+		}
+	}
+	return err
+}
+
+func errOrCancelled(err error) error {
+	if err == nil {
+		return errors.New("statement cancelled")
+	}
+	return err
+}
+
+func (c *Conn) processMessageLocked(m message) error {
 	b := m.base()
 	c.deferredErr = nil
 	c.rbuf.ResetPackets()
@@ -555,7 +667,7 @@ func (c *Conn) processMessage(m message) error {
 		if b.retry {
 			b.errorOccurred = false
 			b.retry = false
-			return c.processMessage(m)
+			return c.processMessageLocked(m)
 		}
 		e := b.errInfo
 		if e.IsSessionDead() {
@@ -574,21 +686,21 @@ type finisher interface{ finish() }
 func (c *Conn) Commit(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.processMessage(newSimpleMessage(c, funcCommit))
+	return c.processMessageCtx(ctx, newSimpleMessage(c, funcCommit))
 }
 
 // Rollback rolls back the current transaction.
 func (c *Conn) Rollback(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.processMessage(newSimpleMessage(c, funcRollback))
+	return c.processMessageCtx(ctx, newSimpleMessage(c, funcRollback))
 }
 
 // Ping performs a round trip to the server.
 func (c *Conn) Ping(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.processMessage(newSimpleMessage(c, funcPing))
+	return c.processMessageCtx(ctx, newSimpleMessage(c, funcPing))
 }
 
 // Close logs off and closes the socket. Uncommitted work is rolled back.

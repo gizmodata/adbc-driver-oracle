@@ -6,6 +6,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-27
+
+### Added
+
+- PL/SQL `OUT` / `IN OUT` bind variables: values are returned as a
+  one-row result set with `ORACLE:parameter_type` field metadata; the
+  Arrow type follows the bound placeholder's type.
+- Implicit result sets (`DBMS_SQL.RETURN_RESULT`) stream back as the
+  statement's result set.
+- Statement cancellation: `Cancel()` on statements and connections
+  (`cursor.adbc_cancel()` in Python) and Go `context` cancellation /
+  deadlines, via TCP out-of-band breaks (Linux/macOS) or in-band
+  markers (Windows, TLS); the interrupted call fails with `ORA-01013`.
+- `adbc.oracle.interval_mode` (`monthdaynano` / `duration` / `string`)
+  and `adbc.oracle.date_mode` (`timestamp` / `date32`) type policies.
+- `adbc.oracle.batch_bytes`: approximate byte bound per Arrow batch,
+  splitting oversized prefetches into zero-copy slices.
+- `adbc.oracle.disable_oob` connection option; `float16` binds.
+
 ## [0.1.2] - 2026-08-26
 
 ### Added
@@ -64,5 +83,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   through the c-shared driver (GizmoSQL / DuckDB are test-only
   dependencies).
 
-[Unreleased]: https://github.com/gizmodata/adbc-driver-oracle/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/gizmodata/adbc-driver-oracle/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/gizmodata/adbc-driver-oracle/compare/v0.1.2...v0.2.0
+[0.1.2]: https://github.com/gizmodata/adbc-driver-oracle/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/gizmodata/adbc-driver-oracle/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/gizmodata/adbc-driver-oracle/releases/tag/v0.1.0

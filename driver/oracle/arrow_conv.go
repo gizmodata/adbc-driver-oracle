@@ -62,10 +62,10 @@ func timestampUnit(scale int8) arrow.TimeUnit {
 }
 
 // arrowTypeFor maps a described column to its Arrow type.
-func arrowTypeFor(c *ttc.Column, mode string) (arrow.DataType, error) {
+func arrowTypeFor(c *ttc.Column, opts typeOptions) (arrow.DataType, error) {
 	switch c.OraTypeNum {
 	case ttc.TypeNumber:
-		return numberArrowType(c, mode), nil
+		return numberArrowType(c, opts.numberMode), nil
 	case ttc.TypeBinaryInteger:
 		return arrow.PrimitiveTypes.Int64, nil
 	case ttc.TypeBinaryFloat:
@@ -77,12 +77,26 @@ func arrowTypeFor(c *ttc.Column, mode string) (arrow.DataType, error) {
 	case ttc.TypeRaw, ttc.TypeLongRaw, ttc.TypeBlob:
 		return arrow.BinaryTypes.Binary, nil
 	case ttc.TypeDate:
+		if opts.dateMode == DateModeDate32 {
+			return arrow.FixedWidthTypes.Date32, nil
+		}
 		return &arrow.TimestampType{Unit: arrow.Second}, nil
 	case ttc.TypeTimestamp:
 		return &arrow.TimestampType{Unit: timestampUnit(c.Scale)}, nil
 	case ttc.TypeTimestampTZ, ttc.TypeTimestampLTZ:
 		return &arrow.TimestampType{Unit: timestampUnit(c.Scale), TimeZone: "UTC"}, nil
-	case ttc.TypeIntervalDS, ttc.TypeIntervalYM:
+	case ttc.TypeIntervalDS:
+		switch opts.intervalMode {
+		case IntervalModeDuration:
+			return &arrow.DurationType{Unit: timestampUnit(c.Scale)}, nil
+		case IntervalModeString:
+			return arrow.BinaryTypes.String, nil
+		}
+		return arrow.FixedWidthTypes.MonthDayNanoInterval, nil
+	case ttc.TypeIntervalYM:
+		if opts.intervalMode == IntervalModeString {
+			return arrow.BinaryTypes.String, nil
+		}
 		return arrow.FixedWidthTypes.MonthDayNanoInterval, nil
 	case ttc.TypeBoolean:
 		return arrow.FixedWidthTypes.Boolean, nil
@@ -93,10 +107,10 @@ func arrowTypeFor(c *ttc.Column, mode string) (arrow.DataType, error) {
 }
 
 // schemaFor builds the Arrow schema for a described result set.
-func schemaFor(cols []ttc.Column, mode string) *arrow.Schema {
+func schemaFor(cols []ttc.Column, opts typeOptions) *arrow.Schema {
 	fields := make([]arrow.Field, len(cols))
 	for i := range cols {
-		dt, err := arrowTypeFor(&cols[i], mode)
+		dt, err := arrowTypeFor(&cols[i], opts)
 		if err != nil {
 			dt = arrow.BinaryTypes.String
 		}
@@ -109,21 +123,22 @@ func schemaFor(cols []ttc.Column, mode string) *arrow.Schema {
 // arrowSink implements ttc.RowSink by appending wire values directly to
 // Arrow builders.
 type arrowSink struct {
-	alloc      memory.Allocator
-	stmt       *ttc.Statement
-	numberMode string
-	schema     *arrow.Schema
-	bldr       *array.RecordBuilder
-	appenders  []func(data []byte) error
-	lastRaw    [][]byte
-	lastNull   []bool
-	rows       int
-	err        error
-	scratch    []byte
+	alloc     memory.Allocator
+	stmt      *ttc.Statement
+	opts      typeOptions
+	schema    *arrow.Schema
+	bldr      *array.RecordBuilder
+	appenders []func(data []byte) error
+	lastRaw   [][]byte
+	lastNull  []bool
+	rows      int
+	bytes     int64 // approximate bytes appended to the current batch
+	err       error
+	scratch   []byte
 }
 
-func newArrowSink(alloc memory.Allocator, stmt *ttc.Statement, numberMode string) *arrowSink {
-	return &arrowSink{alloc: alloc, stmt: stmt, numberMode: numberMode}
+func newArrowSink(alloc memory.Allocator, stmt *ttc.Statement, opts typeOptions) *arrowSink {
+	return &arrowSink{alloc: alloc, stmt: stmt, opts: opts}
 }
 
 // ensure builds the schema and builders once describe info is available.
@@ -134,7 +149,7 @@ func (s *arrowSink) ensure() error {
 	cols := s.stmt.Columns()
 	fields := make([]arrow.Field, len(cols))
 	for i := range cols {
-		dt, err := arrowTypeFor(&cols[i], s.numberMode)
+		dt, err := arrowTypeFor(&cols[i], s.opts)
 		if err != nil {
 			return err
 		}
@@ -162,6 +177,7 @@ func (s *arrowSink) release() {
 func (s *arrowSink) newRecord() arrow.Record {
 	rec := s.bldr.NewRecord()
 	s.rows = 0
+	s.bytes = 0
 	return rec
 }
 
@@ -177,6 +193,7 @@ func (s *arrowSink) AppendValue(col int, data []byte) error {
 		s.err = err
 		return err
 	}
+	s.bytes += int64(len(data)) + 8
 	s.lastRaw[col] = append(s.lastRaw[col][:0], data...)
 	s.lastNull[col] = false
 	return nil
@@ -211,6 +228,7 @@ func (s *arrowSink) AppendDuplicate(col int) error {
 		s.err = err
 		return err
 	}
+	s.bytes += int64(len(s.lastRaw[col])) + 8
 	return nil
 }
 
@@ -334,6 +352,16 @@ func (s *arrowSink) makeAppender(c *ttc.Column, b array.Builder) func([]byte) er
 			return nil
 		}
 	case ttc.TypeDate, ttc.TypeTimestamp, ttc.TypeTimestampTZ, ttc.TypeTimestampLTZ:
+		if db, ok := b.(*array.Date32Builder); ok {
+			return func(data []byte) error {
+				d, err := oratype.DecodeDate(data)
+				if err != nil {
+					return err
+				}
+				db.Append(arrow.Date32(d.Unix() / 86400))
+				return nil
+			}
+		}
 		bb := b.(*array.TimestampBuilder)
 		unit := bb.Type().(*arrow.TimestampType).Unit
 		return func(data []byte) error {
@@ -356,17 +384,50 @@ func (s *arrowSink) makeAppender(c *ttc.Column, b array.Builder) func([]byte) er
 			return nil
 		}
 	case ttc.TypeIntervalDS:
-		bb := b.(*array.MonthDayNanoIntervalBuilder)
-		return func(data []byte) error {
-			v, err := oratype.DecodeIntervalDS(data)
-			if err != nil {
-				return err
+		switch bb := b.(type) {
+		case *array.DurationBuilder:
+			unit := bb.Type().(*arrow.DurationType).Unit
+			return func(data []byte) error {
+				v, err := oratype.DecodeIntervalDS(data)
+				if err != nil {
+					return err
+				}
+				nanos := int64(v.Days)*24*int64(time.Hour) + int64(v.Hours)*int64(time.Hour) + int64(v.Minutes)*int64(time.Minute) + int64(v.Seconds)*int64(time.Second) + int64(v.Nanos)
+				bb.Append(arrow.Duration(nanos / int64(unit.Multiplier())))
+				return nil
 			}
-			nanos := int64(v.Hours)*int64(time.Hour) + int64(v.Minutes)*int64(time.Minute) + int64(v.Seconds)*int64(time.Second) + int64(v.Nanos)
-			bb.Append(arrow.MonthDayNanoInterval{Months: 0, Days: v.Days, Nanoseconds: nanos})
-			return nil
+		case *array.StringBuilder:
+			return func(data []byte) error {
+				v, err := oratype.DecodeIntervalDS(data)
+				if err != nil {
+					return err
+				}
+				bb.Append(isoIntervalDS(v))
+				return nil
+			}
+		default:
+			mb := b.(*array.MonthDayNanoIntervalBuilder)
+			return func(data []byte) error {
+				v, err := oratype.DecodeIntervalDS(data)
+				if err != nil {
+					return err
+				}
+				nanos := int64(v.Hours)*int64(time.Hour) + int64(v.Minutes)*int64(time.Minute) + int64(v.Seconds)*int64(time.Second) + int64(v.Nanos)
+				mb.Append(arrow.MonthDayNanoInterval{Months: 0, Days: v.Days, Nanoseconds: nanos})
+				return nil
+			}
 		}
 	case ttc.TypeIntervalYM:
+		if sb, ok := b.(*array.StringBuilder); ok {
+			return func(data []byte) error {
+				v, err := oratype.DecodeIntervalYM(data)
+				if err != nil {
+					return err
+				}
+				sb.Append(fmt.Sprintf("P%dY%dM", v.Years, v.Months))
+				return nil
+			}
+		}
 		bb := b.(*array.MonthDayNanoIntervalBuilder)
 		return func(data []byte) error {
 			v, err := oratype.DecodeIntervalYM(data)
@@ -456,6 +517,10 @@ func bindForArray(col arrow.Array, field arrow.Field, maxString uint32, supports
 			return nullOr(i, func(i int) ([]byte, error) {
 				return oratype.EncodeNumber(buf[:0], strconv.AppendUint(nil, a.Value(i), 10))
 			})
+		}}
+	case *array.Float16:
+		b = ttc.BindColumn{OraTypeNum: ttc.TypeBinaryFloat, BufferSize: 4, Value: func(i int) ([]byte, error) {
+			return nullOr(i, func(i int) ([]byte, error) { return oratype.EncodeBinaryFloat(buf[:0], a.Value(i).Float32()), nil })
 		}}
 	case *array.Float32:
 		b = ttc.BindColumn{OraTypeNum: ttc.TypeBinaryFloat, BufferSize: 4, Value: func(i int) ([]byte, error) {
@@ -763,4 +828,121 @@ func isReservedWord(name string) bool {
 		return true
 	}
 	return false
+}
+
+// isoIntervalDS renders an INTERVAL DAY TO SECOND as an ISO-8601 duration.
+func isoIntervalDS(v oratype.IntervalDS) string {
+	neg := v.Days < 0 || v.Hours < 0 || v.Minutes < 0 || v.Seconds < 0 || v.Nanos < 0
+	abs := func(x int32) int32 {
+		if x < 0 {
+			return -x
+		}
+		return x
+	}
+	var sb strings.Builder
+	if neg {
+		sb.WriteByte('-')
+	}
+	sb.WriteByte('P')
+	if v.Days != 0 {
+		fmt.Fprintf(&sb, "%dD", abs(v.Days))
+	}
+	sb.WriteByte('T')
+	if v.Hours != 0 {
+		fmt.Fprintf(&sb, "%dH", abs(v.Hours))
+	}
+	if v.Minutes != 0 {
+		fmt.Fprintf(&sb, "%dM", abs(v.Minutes))
+	}
+	if v.Nanos != 0 {
+		secs := fmt.Sprintf("%d.%09d", abs(v.Seconds), abs(v.Nanos))
+		sb.WriteString(strings.TrimRight(strings.TrimRight(secs, "0"), "."))
+		sb.WriteByte('S')
+		return sb.String()
+	}
+	fmt.Fprintf(&sb, "%dS", abs(v.Seconds))
+	return sb.String()
+}
+
+// outBindColumns synthesizes describe-style columns for PL/SQL OUT / IN OUT
+// binds so the standard Arrow conversion can be reused.
+func outBindColumns(st *ttc.Statement, binds []ttc.BindColumn, bound *arrow.Schema) []ttc.Column {
+	dirs := st.OutBindDirs()
+	names := st.BindNames()
+	var cols []ttc.Column
+	for i, dir := range dirs {
+		if dir == ttc.BindDirInput || i >= len(binds) {
+			continue
+		}
+		name := ""
+		if i < len(names) {
+			name = names[i]
+		}
+		b := binds[i]
+		c := ttc.Column{Name: name, OraTypeNum: b.OraTypeNum, CSForm: b.CSForm, NullsAllowed: true, BufferSize: b.BufferSize, FetchType: b.OraTypeNum, FetchCSForm: b.CSForm}
+		switch b.OraTypeNum {
+		case ttc.TypeTimestamp, ttc.TypeTimestampTZ, ttc.TypeTimestampLTZ:
+			c.Scale = 9
+		case ttc.TypeNumber:
+			// Shape the NUMBER after the Arrow type the caller bound so an
+			// int64 placeholder comes back as int64, a decimal as decimal.
+			if bound != nil && i < bound.NumFields() {
+				switch t := bound.Field(i).Type.(type) {
+				case *arrow.Int8Type, *arrow.Int16Type, *arrow.Int32Type, *arrow.Int64Type,
+					*arrow.Uint8Type, *arrow.Uint16Type, *arrow.Uint32Type, *arrow.Uint64Type, *arrow.BooleanType:
+					c.Precision, c.Scale = 18, 0
+				case *arrow.Decimal128Type:
+					c.Precision, c.Scale = int8(t.Precision), int8(t.Scale)
+				case *arrow.Decimal256Type:
+					if t.Precision <= 38 {
+						c.Precision, c.Scale = int8(t.Precision), int8(t.Scale)
+					}
+				}
+			}
+		}
+		cols = append(cols, c)
+	}
+	return cols
+}
+
+// recordFromOutBinds builds the one-row result set carrying PL/SQL OUT /
+// IN OUT bind values (Columnar-compatible: metadata ORACLE:parameter_type).
+func recordFromOutBinds(alloc memory.Allocator, st *ttc.Statement, binds []ttc.BindColumn, bound *arrow.Schema, opts typeOptions) (arrow.Record, error) {
+	cols := outBindColumns(st, binds, bound)
+	dirs := st.OutBindDirs()
+	fields := make([]arrow.Field, len(cols))
+	appIdx := make([]int, 0, len(cols))
+	for i := range dirs {
+		if dirs[i] != ttc.BindDirInput && i < len(binds) {
+			appIdx = append(appIdx, i)
+		}
+	}
+	for i := range cols {
+		dt, err := arrowTypeFor(&cols[i], opts)
+		if err != nil {
+			return nil, err
+		}
+		pt := "OUT"
+		if dirs[appIdx[i]] == ttc.BindDirInputOutput {
+			pt = "IN OUT"
+		}
+		md := arrow.NewMetadata([]string{"ORACLE:type", "ORACLE:parameter_type"}, []string{cols[i].TypeName(), pt})
+		fields[i] = arrow.Field{Name: cols[i].Name, Type: dt, Nullable: true, Metadata: md}
+	}
+	schema := arrow.NewSchema(fields, nil)
+	bldr := array.NewRecordBuilder(alloc, schema)
+	defer bldr.Release()
+	sink := &arrowSink{alloc: alloc, stmt: st, opts: opts}
+	for i := range cols {
+		v, null := st.OutBindValue(appIdx[i])
+		if null {
+			bldr.Field(i).AppendNull()
+			continue
+		}
+		app := sink.makeAppender(&cols[i], bldr.Field(i))
+		if err := app(v); err != nil {
+			return nil, err
+		}
+	}
+	return bldr.NewRecord(), nil
 }

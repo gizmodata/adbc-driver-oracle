@@ -238,3 +238,112 @@ func TestTransactions(t *testing.T) {
 	recs[0].Release()
 	st.Close()
 }
+
+func TestPLSQLOutBindsAndImplicitResults(t *testing.T) {
+	conn := openConn(t, nil)
+	ctx := context.Background()
+
+	// OUT / IN OUT binds come back as a one-row result set.
+	stmt, err := conn.NewStatement()
+	require.NoError(t, err)
+	defer stmt.Close()
+	require.NoError(t, stmt.SetSqlQuery("BEGIN :doubled := :n * 2; :greeting := 'hello ' || :greeting; END;"))
+	params, _, err := array.RecordFromJSON(memory.DefaultAllocator, arrow.NewSchema([]arrow.Field{
+		{Name: "doubled", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+		{Name: "n", Type: arrow.PrimitiveTypes.Int64},
+		{Name: "greeting", Type: arrow.BinaryTypes.String},
+	}, nil), strings.NewReader(`[{"doubled": null, "n": 21, "greeting": "world"}]`))
+	require.NoError(t, err)
+	defer params.Release()
+	require.NoError(t, stmt.Bind(ctx, params))
+	rr, _, err := stmt.ExecuteQuery(ctx)
+	require.NoError(t, err)
+	recs := readAll(t, rr)
+	require.Len(t, recs, 1)
+	rec := recs[0]
+	t.Log(rec.Schema(), rec)
+	require.Equal(t, []string{"DOUBLED", "GREETING"}, []string{rec.Schema().Field(0).Name, rec.Schema().Field(1).Name})
+	pt, _ := rec.Schema().Field(1).Metadata.GetValue("ORACLE:parameter_type")
+	require.Equal(t, "IN OUT", pt)
+	require.EqualValues(t, 42, rec.Column(0).(*array.Int64).Value(0))
+	require.Equal(t, "hello world", rec.Column(1).(*array.String).Value(0))
+	rec.Release()
+
+	// Implicit result set from DBMS_SQL.RETURN_RESULT streams like a query.
+	stmt2, err := conn.NewStatement()
+	require.NoError(t, err)
+	defer stmt2.Close()
+	require.NoError(t, stmt2.SetSqlQuery(`DECLARE c SYS_REFCURSOR; BEGIN
+		OPEN c FOR SELECT LEVEL AS n, 'r' || LEVEL AS s FROM DUAL CONNECT BY LEVEL <= 70000;
+		DBMS_SQL.RETURN_RESULT(c); END;`))
+	rr, _, err = stmt2.ExecuteQuery(ctx)
+	require.NoError(t, err)
+	recs = readAll(t, rr)
+	total := int64(0)
+	for _, r := range recs {
+		total += r.NumRows()
+		r.Release()
+	}
+	require.EqualValues(t, 70000, total)
+	require.GreaterOrEqual(t, len(recs), 2)
+}
+
+func TestTypeModesAndBatchBytes(t *testing.T) {
+	conn := openConn(t, map[string]string{
+		OptionIntervalMode: "duration", OptionDateMode: "date32", OptionBatchBytes: "20000", OptionBatchSize: "100000",
+	})
+	ctx := context.Background()
+	stmt, err := conn.NewStatement()
+	require.NoError(t, err)
+	defer stmt.Close()
+	require.NoError(t, stmt.SetSqlQuery(`SELECT DATE '2024-01-02' AS d, INTERVAL '1 02:03:04.5' DAY TO SECOND AS ds,
+		INTERVAL '2-3' YEAR TO MONTH AS ym, RPAD('x', 1000, 'x') AS pad FROM DUAL CONNECT BY LEVEL <= 500`))
+	rr, _, err := stmt.ExecuteQuery(ctx)
+	require.NoError(t, err)
+	recs := readAll(t, rr)
+	require.Greater(t, len(recs), 5, "batch_bytes should split 500 x 1KB rows into many batches")
+	rec := recs[0]
+	require.Equal(t, arrow.FixedWidthTypes.Date32, rec.Schema().Field(0).Type)
+	require.Equal(t, "duration[us]", rec.Schema().Field(1).Type.String())
+	require.Equal(t, arrow.FixedWidthTypes.MonthDayNanoInterval, rec.Schema().Field(2).Type)
+	require.EqualValues(t, 19724, rec.Column(0).(*array.Date32).Value(0)) // 2024-01-02
+	require.EqualValues(t, (26*3600+3*60+4)*1000000+500000, rec.Column(1).(*array.Duration).Value(0))
+	for _, r := range recs {
+		r.Release()
+	}
+
+	conn2 := openConn(t, map[string]string{OptionIntervalMode: "string"})
+	st2, _ := conn2.NewStatement()
+	defer st2.Close()
+	require.NoError(t, st2.SetSqlQuery("SELECT INTERVAL '-1 02:03:04.5' DAY TO SECOND AS ds, INTERVAL '2-3' YEAR TO MONTH AS ym FROM DUAL"))
+	rr, _, err = st2.ExecuteQuery(ctx)
+	require.NoError(t, err)
+	recs = readAll(t, rr)
+	require.Equal(t, "-P1DT2H3M4.5S", recs[0].Column(0).(*array.String).Value(0))
+	require.Equal(t, "P2Y3M", recs[0].Column(1).(*array.String).Value(0))
+	recs[0].Release()
+}
+
+func TestCancelViaContext(t *testing.T) {
+	conn := openConn(t, nil)
+	stmt, err := conn.NewStatement()
+	require.NoError(t, err)
+	defer stmt.Close()
+	require.NoError(t, stmt.SetSqlQuery("SELECT COUNT(*) FROM (SELECT LEVEL FROM DUAL CONNECT BY LEVEL <= 30000) a, (SELECT LEVEL FROM DUAL CONNECT BY LEVEL <= 30000) b"))
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, _, err = stmt.ExecuteQuery(ctx)
+	require.Error(t, err)
+	require.Less(t, time.Since(start), 5*time.Second)
+	var ae adbc.Error
+	require.ErrorAs(t, err, &ae)
+	require.Equal(t, adbc.StatusTimeout, ae.Code, err.Error())
+	// connection still usable
+	st2, _ := conn.NewStatement()
+	defer st2.Close()
+	require.NoError(t, st2.SetSqlQuery("SELECT 1 FROM DUAL"))
+	rr, _, err := st2.ExecuteQuery(context.Background())
+	require.NoError(t, err)
+	readAll(t, rr)
+}

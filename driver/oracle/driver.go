@@ -199,7 +199,28 @@ func (c *connectionImpl) SetOption(key, value string) error {
 		if err != nil {
 			return err
 		}
-		c.cfg.numberMode = nm
+		c.cfg.types.numberMode = nm
+		return nil
+	case OptionIntervalMode:
+		im, err := parseIntervalMode(value)
+		if err != nil {
+			return err
+		}
+		c.cfg.types.intervalMode = im
+		return nil
+	case OptionDateMode:
+		dm, err := parseDateMode(value)
+		if err != nil {
+			return err
+		}
+		c.cfg.types.dateMode = dm
+		return nil
+	case OptionBatchBytes:
+		n, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || n < 0 {
+			return errStatus(adbc.StatusInvalidArgument, "invalid value %q for %s", value, key)
+		}
+		c.cfg.batchBytes = n
 		return nil
 	case "adbc.oracle.module", "adbc.oracle.action", "adbc.oracle.client_info", "adbc.oracle.client_identifier":
 		var which uint8
@@ -235,7 +256,13 @@ func (c *connectionImpl) GetOption(key string) (string, error) {
 	case OptionPrefetchRows:
 		return strconv.Itoa(c.cfg.prefetchRows), nil
 	case OptionNumberMode:
-		return c.cfg.numberMode, nil
+		return c.cfg.types.numberMode, nil
+	case OptionIntervalMode:
+		return c.cfg.types.intervalMode, nil
+	case OptionDateMode:
+		return c.cfg.types.dateMode, nil
+	case OptionBatchBytes:
+		return strconv.FormatInt(c.cfg.batchBytes, 10), nil
 	}
 	return "", errStatus(adbc.StatusNotFound, "unknown connection option %q", key)
 }
@@ -269,6 +296,7 @@ type statementImpl struct {
 	bound               arrow.Record
 	boundStream         array.RecordReader
 	prepared            *ttc.Statement
+	bindSchema          *arrow.Schema // schema of the last bound parameters
 }
 
 func (s *statementImpl) Close() error {
@@ -414,13 +442,36 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, i
 		if err := st.Execute(ctx, ttc.ExecuteOptions{Binds: binds, NumRows: numRows, AutoCommit: s.conn.autoCommit}); err != nil {
 			return nil, -1, fromTTCError(err)
 		}
+		// A PL/SQL block may hand back an implicit result set
+		// (DBMS_SQL.RETURN_RESULT) — stream it like a query.
+		if child := st.ImplicitResult(); child != nil {
+			reader := newStreamingRecordReader(ctx, s.conn, child)
+			if err := reader.start(); err != nil {
+				reader.abandon()
+				return nil, -1, err
+			}
+			return reader, -1, nil
+		}
+		// OUT / IN OUT binds come back as a one-row result set.
+		if hasOutBinds(st) {
+			rec, err := recordFromOutBinds(s.alloc, st, binds, s.bindSchema, s.conn.cfg.types)
+			if err != nil {
+				return nil, -1, err
+			}
+			defer rec.Release()
+			rr, err := array.NewRecordReader(rec.Schema(), []arrow.Record{rec})
+			if err != nil {
+				return nil, -1, err
+			}
+			return rr, int64(st.RowCount()), nil
+		}
 		rr, err := array.NewRecordReader(arrow.NewSchema([]arrow.Field{}, nil), nil)
 		if err != nil {
 			return nil, -1, err
 		}
 		return rr, int64(st.RowCount()), nil
 	}
-	reader := newStreamingRecordReader(ctx, s.conn, st, s.conn.cfg.batchSize, s.conn.cfg.prefetchRows, s.conn.cfg.numberMode)
+	reader := newStreamingRecordReader(ctx, s.conn, st)
 	if err := st.Execute(ctx, ttc.ExecuteOptions{
 		Binds:        binds,
 		NumRows:      numRows,
@@ -481,7 +532,28 @@ func (s *statementImpl) ExecuteSchema(ctx context.Context) (*arrow.Schema, error
 	if err := st.Describe(ctx); err != nil {
 		return nil, fromTTCError(err)
 	}
-	return schemaFor(st.Columns(), s.conn.cfg.numberMode), nil
+	return schemaFor(st.Columns(), s.conn.cfg.types), nil
+}
+
+// Cancel interrupts the statement's in-progress server call (ADBC 1.1).
+func (s *statementImpl) Cancel() error {
+	s.conn.conn.Cancel()
+	return nil
+}
+
+// Cancel interrupts whatever call is in progress on the connection.
+func (c *connectionImpl) Cancel() error {
+	c.conn.Cancel()
+	return nil
+}
+
+func hasOutBinds(st *ttc.Statement) bool {
+	for _, d := range st.OutBindDirs() {
+		if d != ttc.BindDirInput {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *statementImpl) GetParameterSchema() (*arrow.Schema, error) {
@@ -540,6 +612,7 @@ func (s *statementImpl) bindColumns(st *ttc.Statement) ([]ttc.BindColumn, int, e
 	if err != nil {
 		return nil, 0, err
 	}
+	s.bindSchema = rec.Schema()
 	n := int(rec.NumRows())
 	if n == 0 {
 		n = 1

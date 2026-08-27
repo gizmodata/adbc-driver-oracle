@@ -1005,3 +1005,100 @@ def test_number_mode_option(oracle_server):
             assert tuple(table.schema.types) == types, mode
             row = table.to_pylist()[0]
             assert float(row["I"]) == 7 and float(row["D"]) == 12.34
+
+
+# --------------------------------------------------------------------------
+# v0.2: PL/SQL OUT binds, implicit result sets, type modes, cancellation
+# --------------------------------------------------------------------------
+
+
+def test_plsql_out_and_inout_binds(oracle_server):
+    """OUT / IN OUT binds are returned as a one-row result set whose fields
+    carry ORACLE:parameter_type metadata (Columnar-compatible)."""
+    with _connect(oracle_server) as conn, conn.cursor() as cur:
+        cur.execute(
+            "BEGIN :doubled := :n * 2; :greeting := 'hello ' || :greeting; :when := DATE '2024-01-02'; END;",
+            (None, 21, "world", None),
+        )
+        table = cur.fetch_arrow_table()
+        assert table.column_names == ["DOUBLED", "GREETING", "WHEN"]
+        assert table.schema.field("GREETING").metadata[b"ORACLE:parameter_type"] == b"IN OUT"
+        assert table.schema.field("DOUBLED").metadata[b"ORACLE:parameter_type"] == b"OUT"
+        row = table.to_pylist()[0]
+        # A bare None placeholder has no Arrow type, so the OUT value comes
+        # back as text; bind a typed pyarrow array to get an int64 back.
+        assert row["DOUBLED"] == "42"
+        assert row["GREETING"] == "hello world"
+        assert isinstance(row["WHEN"], str)  # NLS-formatted, e.g. '02-JAN-24' 
+        cur.execute(
+            "BEGIN :doubled := :n * 2; END;",
+            pa.record_batch([pa.array([None], pa.int64()), pa.array([21], pa.int64())], names=["doubled", "n"]),
+        )
+        assert cur.fetch_arrow_table().to_pylist() == [{"DOUBLED": 42}]
+
+
+def test_plsql_implicit_result_set(oracle_server):
+    """DBMS_SQL.RETURN_RESULT cursors stream back like a query."""
+    with _connect(oracle_server) as conn, conn.cursor() as cur:
+        cur.execute(
+            """DECLARE c SYS_REFCURSOR; BEGIN
+                 OPEN c FOR SELECT LEVEL AS n, 'r' || LEVEL AS s FROM DUAL CONNECT BY LEVEL <= 70000;
+                 DBMS_SQL.RETURN_RESULT(c); END;"""
+        )
+        table = cur.fetch_arrow_table()
+        assert table.num_rows == 70000
+        assert table.column("S")[-1].as_py() == "r70000"
+
+
+def test_interval_and_date_modes(oracle_server):
+    import adbc_driver_oracle.dbapi as oracle
+
+    sql = "SELECT DATE '2024-01-02' AS d, INTERVAL '1 02:03:04.5' DAY TO SECOND AS ds, INTERVAL '2-3' YEAR TO MONTH AS ym FROM DUAL"
+    with oracle.connect(
+        uri=oracle_server.uri,
+        db_kwargs={"adbc.oracle.interval_mode": "duration", "adbc.oracle.date_mode": "date32"},
+    ) as conn, conn.cursor() as cur:
+        cur.execute(sql)
+        table = cur.fetch_arrow_table()
+        assert table.schema.field("D").type == pa.date32()
+        assert table.schema.field("DS").type == pa.duration("us")  # DAY TO SECOND(6) by default
+        row = table.to_pylist()[0]
+        assert row["D"] == datetime.date(2024, 1, 2)
+        assert row["DS"] == datetime.timedelta(days=1, hours=2, minutes=3, seconds=4.5)
+    with oracle.connect(
+        uri=oracle_server.uri, db_kwargs={"adbc.oracle.interval_mode": "string"}
+    ) as conn, conn.cursor() as cur:
+        cur.execute(sql)
+        row = cur.fetch_arrow_table().to_pylist()[0]
+        assert row["DS"] == "P1DT2H3M4.5S" and row["YM"] == "P2Y3M"
+
+
+def test_batch_bytes_bounds_batches(oracle_server):
+    import adbc_driver_oracle.dbapi as oracle
+
+    with oracle.connect(
+        uri=oracle_server.uri, db_kwargs={"adbc.oracle.batch_bytes": "20000"}
+    ) as conn, conn.cursor() as cur:
+        cur.execute("SELECT RPAD('x', 1000, 'x') AS pad FROM DUAL CONNECT BY LEVEL <= 500")
+        batches = list(cur.fetch_record_batch())
+        assert sum(b.num_rows for b in batches) == 500
+        assert len(batches) > 5
+
+
+def test_cancel_running_statement(oracle_server):
+    """cursor.adbc_cancel() from another thread interrupts a long query."""
+    import threading
+    import time
+
+    with _connect(oracle_server) as conn, conn.cursor() as cur:
+        threading.Timer(0.5, cur.adbc_cancel).start()
+        start = time.time()
+        with pytest.raises(Exception, match="ORA-01013"):
+            cur.execute(
+                "SELECT COUNT(*) FROM (SELECT LEVEL FROM DUAL CONNECT BY LEVEL <= 30000) a,"
+                " (SELECT LEVEL FROM DUAL CONNECT BY LEVEL <= 30000) b"
+            )
+            cur.fetchall()
+        assert time.time() - start < 10
+        cur.execute("SELECT 1 FROM DUAL")
+        assert cur.fetchone() == (1,)

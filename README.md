@@ -286,6 +286,40 @@ with oracle.connect(
     conn.commit()  # both inserts persist atomically
 ```
 
+### PL/SQL: OUT / IN OUT binds and implicit result sets
+
+A PL/SQL block's `OUT` / `IN OUT` binds come back as a **one-row result
+set** (the Arrow C Data Interface can't mutate bound input, so this
+matches Columnar's convention); each field carries
+`ORACLE:parameter_type` = `OUT` / `IN OUT` metadata. Bind a typed
+placeholder to choose the return type — an untyped `None` returns text:
+
+```python
+cur.execute(
+    "BEGIN :doubled := :n * 2; :greeting := 'hello ' || :greeting; END;",
+    pa.record_batch([pa.array([None], pa.int64()), pa.array([21], pa.int64()), pa.array(["world"])],
+                    names=["doubled", "n", "greeting"]),
+)
+cur.fetch_arrow_table().to_pylist()   # [{'DOUBLED': 42, 'GREETING': 'hello world'}]
+```
+
+Cursors returned with `DBMS_SQL.RETURN_RESULT` stream back exactly like
+a query (the first cursor; further ones are closed):
+
+```python
+cur.execute("""DECLARE c SYS_REFCURSOR; BEGIN
+                 OPEN c FOR SELECT * FROM emp; DBMS_SQL.RETURN_RESULT(c); END;""")
+table = cur.fetch_arrow_table()
+```
+
+### Cancellation
+
+`cursor.adbc_cancel()` (or a cancelled/expired `context.Context` in Go)
+interrupts the running server call; the statement fails with
+`ORA-01013` and the connection stays usable. Cancellation uses TCP
+out-of-band data on Linux/macOS (in-band markers on Windows and over
+TLS), the same mechanism as python-oracledb.
+
 ### Parameter binding
 
 Positional `?` placeholders are rewritten to Oracle's `:1`, `:2`, …
@@ -325,6 +359,10 @@ descriptors are accepted in place of the `oracle://` form.
 | `adbc.oracle.batch_size`        | `65536`   | Maximum rows per Arrow record batch.                                  |
 | `adbc.oracle.prefetch_rows`     | (batch size, max 65536) | Rows the server returns per fetch round trip.           |
 | `adbc.oracle.number_mode`       | `auto`    | `NUMBER` → Arrow policy: `auto`, `decimal`, `double`, `string` (see [Type mapping](#type-mapping)). |
+| `adbc.oracle.interval_mode`     | `monthdaynano` | `INTERVAL` → Arrow policy: `monthdaynano`, `duration` (DAY TO SECOND), `string` (ISO 8601). |
+| `adbc.oracle.date_mode`         | `timestamp` | `DATE` → `timestamp[s]` (keeps the time of day) or `date32`.        |
+| `adbc.oracle.batch_bytes`       | `0`       | Approximate upper bound on bytes per Arrow record batch (0 = only `batch_size` applies). |
+| `adbc.oracle.disable_oob`       | `false`   | Disable out-of-band (TCP urgent) breaks used for cancellation; falls back to in-band markers. |
 | `adbc.oracle.session_time_zone` | `+00:00`  | Session `TIME_ZONE`; `TIMESTAMP WITH LOCAL TIME ZONE` values are returned in it. |
 | `adbc.oracle.sdu`               | (server)  | Requested session data unit (packet size) in bytes.                   |
 | `adbc.oracle.application_name`  | (executable name) | Program name reported to the server (`V$SESSION.PROGRAM`, `CLIENT_PROGRAM_NAME`). |
@@ -333,8 +371,9 @@ descriptors are accepted in place of the `oracle://` form.
 
 All of these are also accepted as `?key=value` URI query parameters
 (without the `adbc.oracle.` prefix, e.g. `?tls=true&number_mode=decimal`).
-After connecting, `adbc.oracle.batch_size`, `adbc.oracle.prefetch_rows`,
-`adbc.oracle.number_mode` and the end-to-end tracing attributes
+After connecting, `adbc.oracle.batch_size`, `adbc.oracle.batch_bytes`,
+`adbc.oracle.prefetch_rows`, `adbc.oracle.number_mode`,
+`adbc.oracle.interval_mode`, `adbc.oracle.date_mode` and the end-to-end tracing attributes
 `adbc.oracle.module` / `.action` / `.client_info` / `.client_identifier`
 can be changed per connection.
 
@@ -445,10 +484,11 @@ Reads (`adbc.oracle.number_mode=auto`, the default):
 | `BINARY_FLOAT` / `BINARY_DOUBLE`         | `float32` / `float64`                        |
 | `CHAR`, `VARCHAR2`, `NCHAR`, `NVARCHAR2`, `LONG`, `CLOB`, `NCLOB` | `utf8`               |
 | `RAW`, `LONG RAW`, `BLOB`                | `binary`                                     |
-| `DATE`                                   | `timestamp[s]`                               |
+| `DATE`                                   | `timestamp[s]` (`date32` with `date_mode=date32`) |
 | `TIMESTAMP(n)`                           | `timestamp[s / ms / us / ns]` by fractional-second precision n |
 | `TIMESTAMP WITH TIME ZONE` / `WITH LOCAL TIME ZONE` | `timestamp[…, tz=UTC]` (the instant; the original offset is not kept) |
-| `INTERVAL DAY TO SECOND` / `YEAR TO MONTH` | `month_day_nano_interval`                  |
+| `INTERVAL DAY TO SECOND`                 | `month_day_nano_interval`; `duration[unit by precision]` with `interval_mode=duration`; ISO-8601 `utf8` (`P1DT2H3M4.5S`) with `interval_mode=string` |
+| `INTERVAL YEAR TO MONTH`                 | `month_day_nano_interval`; ISO-8601 `utf8` (`P2Y3M`) with `interval_mode=string` |
 | `ROWID` / `UROWID`                       | `utf8`                                       |
 | `JSON` (21c+)                            | `utf8` — native OSON decoded to JSON text client-side |
 | `BOOLEAN` (23ai)                         | `bool`                                       |
@@ -463,7 +503,7 @@ Writes (bind parameters and bulk-ingest DDL):
 | Arrow type                       | Bind type          | Generated DDL                          |
 |----------------------------------|--------------------|----------------------------------------|
 | `int8/16/32/64`, `uint*`         | `NUMBER`           | `NUMBER(3/5/10/19/20)`                 |
-| `float32` / `float64`            | `BINARY_FLOAT` / `BINARY_DOUBLE` | same                     |
+| `float16` / `float32` / `float64` | `BINARY_FLOAT` / `BINARY_FLOAT` / `BINARY_DOUBLE` | same         |
 | `decimal128/256(p,s)`            | `NUMBER`           | `NUMBER(p,s)`                          |
 | `utf8`, `large_utf8`, `utf8_view` | `VARCHAR2` (`LONG` above the server max) | `VARCHAR2(4000)` (`CLOB` for `large_utf8`; see ingest options) |
 | `binary`, `fixed_size_binary`, `large_binary` | `RAW` (`LONG RAW` above the max) | `RAW(2000)` / `RAW(n)` / `BLOB` |
@@ -481,16 +521,17 @@ Empty strings are bound as NULL, matching Oracle's own `''` semantics.
   servers that *require* it (`SQLNET.ENCRYPTION_SERVER=required`) refuse
   the connection with a clear error. Use TLS (`tcps`) instead — the same
   constraint python-oracledb thin mode has.
-- Object types (`CREATE TYPE`), `XMLTYPE`, `REF CURSOR` / implicit
-  result sets, `BFILE`, PL/SQL `OUT`/`IN OUT` binds, `VECTOR` and
-  Advanced Queuing are not supported yet (select `XMLSERIALIZE(...)`,
-  `TO_CLOB(...)`, `VECTOR_SERIALIZE(...)` etc. to read those as text).
+- Object types (`CREATE TYPE`), `XMLTYPE`, `REF CURSOR` bind/column
+  values, `BFILE`, LOB-typed `OUT` binds, `VECTOR` and Advanced Queuing
+  are not supported yet (select `XMLSERIALIZE(...)`, `TO_CLOB(...)`,
+  `VECTOR_SERIALIZE(...)` etc. to read those as text).
 - Named time-zone regions in `TIMESTAMP WITH TIME ZONE` values are
   returned as UTC instants (offset-based zones are exact).
 - Kerberos / RADIUS / external OS authentication, DRCP pooling and
   Oracle wallet private keys with a password are not supported.
-- Statement cancellation / call timeouts (`context` deadlines mid-fetch)
-  are not wired up yet.
+- Cancellation is only honoured by the server at SQL execution
+  checkpoints; a call blocked in e.g. `DBMS_SESSION.SLEEP` finishes
+  before `ORA-01013` is raised (python-oracledb behaves the same).
 
 ## Repo layout
 

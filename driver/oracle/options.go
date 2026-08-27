@@ -61,6 +61,20 @@ const (
 	// OptionSessionTimeZone sets the session TIME_ZONE (default "+00:00" so
 	// TIMESTAMP WITH LOCAL TIME ZONE values arrive as UTC).
 	OptionSessionTimeZone = "adbc.oracle.session_time_zone"
+	// OptionIntervalMode controls how INTERVAL columns map to Arrow:
+	// "monthdaynano" (default), "duration" (DAY TO SECOND only; YEAR TO
+	// MONTH stays month_day_nano_interval) or "string" (ISO-8601 text).
+	OptionIntervalMode = "adbc.oracle.interval_mode"
+	// OptionDateMode controls how DATE columns map to Arrow: "timestamp"
+	// (default, timestamp[s] — Oracle DATE has a time component) or
+	// "date32" (drops the time of day).
+	OptionDateMode = "adbc.oracle.date_mode"
+	// OptionBatchBytes caps the approximate size of an Arrow record batch
+	// in bytes (0 = unlimited; rows are still capped by batch_size).
+	OptionBatchBytes = "adbc.oracle.batch_bytes"
+	// OptionDisableOOB disables out-of-band (TCP urgent data) breaks used
+	// for statement cancellation.
+	OptionDisableOOB = "adbc.oracle.disable_oob"
 	// OptionNumberMode controls how NUMBER columns map to Arrow:
 	// "auto" (default: int64 / decimal128 / float64 by precision and
 	// scale), "decimal" (decimal128 wherever possible), "double", "string".
@@ -88,13 +102,56 @@ const (
 	NumberModeString  = "string"
 )
 
+// Interval mapping modes.
+const (
+	IntervalModeMonthDayNano = "monthdaynano"
+	IntervalModeDuration     = "duration"
+	IntervalModeString       = "string"
+)
+
+// Date mapping modes.
+const (
+	DateModeTimestamp = "timestamp"
+	DateModeDate32    = "date32"
+)
+
+// typeOptions collects the Arrow mapping policies.
+type typeOptions struct {
+	numberMode   string
+	intervalMode string
+	dateMode     string
+}
+
+func parseIntervalMode(v string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case IntervalModeMonthDayNano, "", "auto", "month_day_nano":
+		return IntervalModeMonthDayNano, nil
+	case IntervalModeDuration:
+		return IntervalModeDuration, nil
+	case IntervalModeString, "text":
+		return IntervalModeString, nil
+	}
+	return "", errStatus(adbc.StatusInvalidArgument, "oracle: unknown %s %q", OptionIntervalMode, v)
+}
+
+func parseDateMode(v string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case DateModeTimestamp, "", "auto":
+		return DateModeTimestamp, nil
+	case DateModeDate32, "date":
+		return DateModeDate32, nil
+	}
+	return "", errStatus(adbc.StatusInvalidArgument, "oracle: unknown %s %q", OptionDateMode, v)
+}
+
 // connConfig is the resolved connection configuration.
 type connConfig struct {
 	ttc          ttc.Config
 	batchSize    int
+	batchBytes   int64
 	prefetchRows int
 	trace        bool
-	numberMode   string
+	types        typeOptions
 }
 
 var easyConnectRe = regexp.MustCompile(`^(?:(tcps?)://)?([^:/]+)(?::(\d+))?/([^?:]+)(?::([A-Za-z]+))?(?:\?(.*))?$`)
@@ -102,7 +159,7 @@ var easyConnectRe = regexp.MustCompile(`^(?:(tcps?)://)?([^:/]+)(?::(\d+))?/([^?
 // parseOptions merges the URI and explicit ADBC options into a config.
 // Explicit options override URI components.
 func parseOptions(opts map[string]string) (*connConfig, error) {
-	cfg := &connConfig{batchSize: 65536, numberMode: NumberModeAuto}
+	cfg := &connConfig{batchSize: 65536, types: typeOptions{numberMode: NumberModeAuto, intervalMode: IntervalModeMonthDayNano, dateMode: DateModeTimestamp}}
 	cfg.ttc.ConnectTimeout = 30 * time.Second
 	cfg.ttc.FullVersion = fullVersionNum()
 	var tlsEnabled, skipVerify bool
@@ -171,7 +228,27 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 			if err != nil {
 				return err
 			}
-			cfg.numberMode = nm
+			cfg.types.numberMode = nm
+		case "interval_mode":
+			im, err := parseIntervalMode(v)
+			if err != nil {
+				return err
+			}
+			cfg.types.intervalMode = im
+		case "date_mode":
+			dm, err := parseDateMode(v)
+			if err != nil {
+				return err
+			}
+			cfg.types.dateMode = dm
+		case "batch_bytes":
+			n, err := strconv.ParseInt(v, 10, 64)
+			if err != nil || n < 0 {
+				return errStatus(adbc.StatusInvalidArgument, "oracle: invalid batch_bytes %q", v)
+			}
+			cfg.batchBytes = n
+		case "disable_oob":
+			cfg.ttc.DisableOOB = isTrue(v)
 		case "sdu":
 			n, err := strconv.Atoi(v)
 			if err != nil || n < 512 {
@@ -336,7 +413,27 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 			if err != nil {
 				return nil, err
 			}
-			cfg.numberMode = nm
+			cfg.types.numberMode = nm
+		case OptionIntervalMode:
+			im, err := parseIntervalMode(v)
+			if err != nil {
+				return nil, err
+			}
+			cfg.types.intervalMode = im
+		case OptionDateMode:
+			dm, err := parseDateMode(v)
+			if err != nil {
+				return nil, err
+			}
+			cfg.types.dateMode = dm
+		case OptionBatchBytes:
+			n, err := strconv.ParseInt(v, 10, 64)
+			if err != nil || n < 0 {
+				return nil, errStatus(adbc.StatusInvalidArgument, "oracle: invalid %s %q", k, v)
+			}
+			cfg.batchBytes = n
+		case OptionDisableOOB:
+			cfg.ttc.DisableOOB = isTrue(v)
 		case OptionSDU:
 			n, err := strconv.Atoi(v)
 			if err != nil || n < 512 {

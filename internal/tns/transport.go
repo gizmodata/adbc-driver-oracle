@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -24,6 +25,7 @@ type Transport struct {
 	Trace          func(format string, args ...any)
 	readTimeout    time.Duration
 	hdr            [PacketHeaderSize]byte
+	writeMu        sync.Mutex
 }
 
 // NewTransport wraps an established socket.
@@ -57,6 +59,27 @@ func (t *Transport) Close() error {
 	}
 	t.closed = true
 	return t.conn.Close()
+}
+
+// OOBSupported reports whether urgent-data breaks can be sent on this
+// transport (plain TCP on a Unix platform).
+func (t *Transport) OOBSupported() bool {
+	if !oobSupported() {
+		return false
+	}
+	_, ok := t.conn.(*net.TCPConn)
+	return ok
+}
+
+// SendOOB sends the out-of-band attention byte.
+func (t *Transport) SendOOB() error {
+	if !t.Connected() {
+		return ErrConnectionClosed
+	}
+	if t.Trace != nil {
+		t.Trace("send out-of-band break")
+	}
+	return sendOOB(t.conn)
 }
 
 // UpgradeTLS wraps the existing socket in TLS (used for TCPS renegotiation
@@ -119,6 +142,8 @@ func (t *Transport) WritePacket(data []byte) error {
 	if t.Trace != nil {
 		t.Trace("send packet type=%d size=%d\n%s", data[4], len(data), hexDump(data))
 	}
+	t.writeMu.Lock()
+	defer t.writeMu.Unlock()
 	_ = t.conn.SetWriteDeadline(time.Time{})
 	if _, err := t.conn.Write(data); err != nil {
 		t.closed = true

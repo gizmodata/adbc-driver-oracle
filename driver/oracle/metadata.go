@@ -207,5 +207,5 @@ func (c *connectionImpl) getTableSchemaImpl(ctx context.Context, catalog, dbSche
 	if err := st.Describe(ctx); err != nil {
 		return nil, fromTTCError(err)
 	}
-	return schemaFor(st.Columns(), c.cfg.numberMode), nil
+	return schemaFor(st.Columns(), c.cfg.types), nil
 }

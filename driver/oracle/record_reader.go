@@ -22,9 +22,10 @@ type streamingRecordReader struct {
 	alloc        memory.Allocator
 	sink         *arrowSink
 	batchSize    int
+	batchBytes   int64
 	prefetchRows int
-	numberMode   string
 	schema       *arrow.Schema
+	pending      []arrow.Record // byte-bounded slices of an oversized batch
 	current      arrow.Record
 	err          error
 	refs         atomic.Int64
@@ -32,17 +33,18 @@ type streamingRecordReader struct {
 	closed       bool
 }
 
-func newStreamingRecordReader(ctx context.Context, conn *connectionImpl, stmt *ttc.Statement, batchSize, prefetchRows int, numberMode string) *streamingRecordReader {
+func newStreamingRecordReader(ctx context.Context, conn *connectionImpl, stmt *ttc.Statement) *streamingRecordReader {
+	cfg := conn.cfg
 	r := &streamingRecordReader{
 		ctx:          ctx,
 		stmt:         stmt,
 		conn:         conn,
 		alloc:        conn.alloc,
-		batchSize:    batchSize,
-		prefetchRows: prefetchRows,
-		numberMode:   numberMode,
+		batchSize:    cfg.batchSize,
+		batchBytes:   cfg.batchBytes,
+		prefetchRows: cfg.prefetchRows,
 	}
-	r.sink = newArrowSink(conn.alloc, stmt, numberMode)
+	r.sink = newArrowSink(conn.alloc, stmt, cfg.types)
 	r.refs.Store(1)
 	return r
 }
@@ -74,6 +76,10 @@ func (r *streamingRecordReader) Release() {
 		r.current.Release()
 		r.current = nil
 	}
+	for _, p := range r.pending {
+		p.Release()
+	}
+	r.pending = nil
 	r.close()
 }
 
@@ -103,7 +109,12 @@ func (r *streamingRecordReader) Next() bool {
 		r.current.Release()
 		r.current = nil
 	}
-	for r.sink.rows < r.batchSize && r.stmt.MoreRows() {
+	if len(r.pending) > 0 {
+		r.current = r.pending[0]
+		r.pending = r.pending[1:]
+		return true
+	}
+	for r.sink.rows < r.batchSize && r.stmt.MoreRows() && (r.batchBytes == 0 || r.sink.bytes < r.batchBytes) {
 		want := r.batchSize - r.sink.rows
 		if want > r.prefetchRows {
 			want = r.prefetchRows
@@ -119,12 +130,38 @@ func (r *streamingRecordReader) Next() bool {
 			return false
 		}
 	}
+	if len(r.pending) > 0 {
+		r.current = r.pending[0]
+		r.pending = r.pending[1:]
+		return true
+	}
 	if r.sink.rows == 0 {
 		r.done = true
 		r.close()
 		return false
 	}
-	r.current = r.sink.newRecord()
+	bytes := r.sink.bytes
+	rec := r.sink.newRecord()
+	if r.batchBytes > 0 && bytes > r.batchBytes && rec.NumRows() > 1 {
+		// The server's prefetch delivered more than batch_bytes at once:
+		// hand it out as zero-copy slices of roughly batch_bytes each.
+		per := int64(float64(rec.NumRows()) * float64(r.batchBytes) / float64(bytes))
+		if per < 1 {
+			per = 1
+		}
+		for off := int64(0); off < rec.NumRows(); off += per {
+			end := off + per
+			if end > rec.NumRows() {
+				end = rec.NumRows()
+			}
+			r.pending = append(r.pending, rec.NewSlice(off, end))
+		}
+		rec.Release()
+		r.current = r.pending[0]
+		r.pending = r.pending[1:]
+		return true
+	}
+	r.current = rec
 	return true
 }
 

@@ -117,10 +117,20 @@ without a listener on localhost:1521.
 ## Known limitations / open items
 
 - Not supported: Native Network Encryption (server must not *require*
-  it; TLS is the alternative), object types / XMLTYPE / REF CURSOR /
-  implicit result sets / VECTOR / BFILE / PL/SQL OUT binds, Kerberos,
-  DRCP, password-protected wallet keys, statement cancellation and call
-  timeouts.
+  it; TLS is the alternative), object types / XMLTYPE / REF CURSOR
+  values / VECTOR / BFILE / LOB-typed OUT binds, Kerberos, DRCP,
+  password-protected wallet keys.
+- Cancellation: `Conn.Cancel()` / ctx cancellation sends a TCP
+  out-of-band byte (Unix, plain TCP; the OOB check happens right after
+  ACCEPT) or an INTERRUPT marker otherwise; the server answers with
+  markers that `reset()` consumes and the call fails with ORA-01013.
+  Oracle only checks for breaks at SQL checkpoints — PL/SQL sleeps run
+  to completion (verified identical with python-oracledb thin).
+- PL/SQL OUT / IN OUT binds: the I/O vector gives directions, ROW_DATA
+  then carries the out values (`Statement.OutBindValue`); implicit
+  result sets (`DBMS_SQL.RETURN_RESULT`) arrive as message 27 with a
+  describe + cursor id; child cursors fetch via an execute message
+  without SQL/EXECUTE (`Statement.isChild`).
 - `adbc_driver_manager` (Python) does not forward `table_types_filter`
   to drivers (TODO in its `_lib.pyx`); the Go driver filters correctly.
 - Unknown-precision NUMBER (expressions, `COUNT(*)`) maps to `float64`

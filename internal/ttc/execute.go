@@ -77,7 +77,40 @@ type Statement struct {
 	lastRowid      string
 	closed         bool
 	warning        *Error
+
+	// PL/SQL OUT / IN OUT bind results (one value per bind; only entries
+	// listed in OutBindDirs are populated).
+	outDirs   []uint8
+	outValues [][]byte
+	outNull   []bool
+	// implicit result set (DBMS_SQL.RETURN_RESULT), if any
+	implicit *Statement
+	isChild  bool
 }
+
+// Bind directions reported by the server for PL/SQL binds.
+const (
+	BindDirInput       uint8 = bindDirInput
+	BindDirOutput      uint8 = bindDirOutput
+	BindDirInputOutput uint8 = bindDirInputOutput
+)
+
+// OutBindDirs returns, for each bind, its direction as reported by the
+// server after executing a PL/SQL block (nil for non-PL/SQL statements).
+func (s *Statement) OutBindDirs() []uint8 { return s.outDirs }
+
+// OutBindValue returns the wire-encoded value of bind i after a PL/SQL
+// execution (nil, true for NULL).
+func (s *Statement) OutBindValue(i int) ([]byte, bool) {
+	if i >= len(s.outValues) {
+		return nil, true
+	}
+	return s.outValues[i], s.outNull[i]
+}
+
+// ImplicitResult returns the first implicit result set cursor returned
+// by a PL/SQL block via DBMS_SQL.RETURN_RESULT, or nil.
+func (s *Statement) ImplicitResult() *Statement { return s.implicit }
 
 // Prepare parses SQL and returns a statement. No round trip happens.
 func (c *Conn) Prepare(sql string) *Statement {
@@ -206,6 +239,11 @@ func (s *Statement) Execute(ctx context.Context, opts ExecuteOptions) error {
 	}
 	s.rowCount = 0
 	s.warning = nil
+	s.outDirs, s.outValues, s.outNull = nil, nil, nil
+	if s.implicit != nil {
+		s.implicit.Close()
+		s.implicit = nil
+	}
 	m := &executeMessage{}
 	m.stmt = s
 	m.binds = opts.Binds
@@ -217,14 +255,14 @@ func (s *Statement) Execute(ctx context.Context, opts ExecuteOptions) error {
 	m.useBatchErrors = opts.BatchErrors
 	m.sink = opts.Sink
 	m.init(c, funcExecute)
-	if err := c.processMessage(m); err != nil {
+	if err := c.processMessageCtx(ctx, m); err != nil {
 		return err
 	}
 	if m.resend {
 		// A define pass is required (LOB/JSON columns): resend with defines.
 		m.resend = false
 		m.rowIndex = 0
-		if err := c.processMessage(m); err != nil {
+		if err := c.processMessageCtx(ctx, m); err != nil {
 			return err
 		}
 	}
@@ -257,13 +295,32 @@ func (s *Statement) Fetch(ctx context.Context, sink RowSink, arraySize int) erro
 	if s.cursorID == 0 {
 		return errors.New("oracle: cursor has been closed")
 	}
+	if s.isChild {
+		// Implicit-result cursors have no SQL of their own: fetch via an
+		// execute message (define pass if needed), as python-oracledb does.
+		m := &executeMessage{}
+		m.stmt = s
+		m.sink = sink
+		m.prefetchRows = arraySize
+		m.arraySize = arraySize
+		m.init(c, funcExecute)
+		if err := c.processMessageCtx(ctx, m); err != nil {
+			return err
+		}
+		if m.resend {
+			m.resend = false
+			m.rowIndex = 0
+			return c.processMessageCtx(ctx, m)
+		}
+		return nil
+	}
 	m := &fetchMessage{}
 	m.stmt = s
 	m.sink = sink
 	m.arraySize = arraySize
 	m.inFetch = true
 	m.init(c, funcFetch)
-	return c.processMessage(m)
+	return c.processMessageCtx(ctx, m)
 }
 
 // messageWithData is the shared machinery for execute and fetch.
@@ -285,6 +342,7 @@ type messageWithData struct {
 	haveBitVector  bool
 	numColumnsSent uint16
 	outBindDirs    []uint8
+	outBinds       []int // indices of OUT / IN OUT binds
 }
 
 func (m *messageWithData) processMessage(r *tns.ReadBuffer, msgType uint8) error {
@@ -307,7 +365,7 @@ func (m *messageWithData) processMessage(r *tns.ReadBuffer, msgType uint8) error
 	case tns.MsgTypeIOVector:
 		return m.processIOVector(r)
 	case tns.MsgTypeImplicitResultset:
-		return errors.New("oracle: implicit result sets are not supported")
+		return m.processImplicitResult(r)
 	}
 	return m.baseMessage.processMessage(r, msgType)
 }
@@ -429,17 +487,108 @@ func (m *messageWithData) processIOVector(r *tns.ReadBuffer) error {
 		r.SkipRawBytes(int(n))
 	}
 	m.outBindDirs = make([]uint8, numBinds)
+	m.outBinds = m.outBinds[:0]
 	for i := 0; i < numBinds; i++ {
 		m.outBindDirs[i] = r.ReadUB1()
 		if m.outBindDirs[i] != bindDirInput {
-			return errors.New("oracle: OUT / IN OUT bind variables are not supported")
+			m.outBinds = append(m.outBinds, i)
+		}
+	}
+	s := m.stmt
+	s.outDirs = m.outBindDirs
+	if len(m.outBinds) > 0 && m.numExecs > 1 {
+		return errors.New("oracle: PL/SQL blocks with OUT / IN OUT binds cannot be executed with multiple bind rows")
+	}
+	s.outValues = make([][]byte, len(m.binds))
+	s.outNull = make([]bool, len(m.binds))
+	for i := range s.outNull {
+		s.outNull[i] = true
+	}
+	return r.Err()
+}
+
+// processImplicitResult handles the cursors returned by
+// DBMS_SQL.RETURN_RESULT. The first one becomes the statement's implicit
+// result; any further ones are closed.
+func (m *messageWithData) processImplicitResult(r *tns.ReadBuffer) error {
+	s := m.stmt
+	numResults := r.ReadUB4()
+	for i := 0; i < int(numResults); i++ {
+		n := r.ReadUB1()
+		r.SkipRawBytes(int(n))
+		child := &Statement{conn: s.conn, kind: KindQuery, moreRows: true, isChild: true}
+		if err := m.describeInto(r, child); err != nil {
+			return err
+		}
+		child.cursorID = r.ReadUB2()
+		if s.implicit == nil {
+			s.implicit = child
+		} else {
+			child.Close()
 		}
 	}
 	return r.Err()
 }
 
+// processOutBinds reads the values returned for OUT / IN OUT binds of a
+// PL/SQL block (one ROW_DATA message per execution).
+func (m *messageWithData) processOutBinds(r *tns.ReadBuffer) error {
+	s := m.stmt
+	for _, i := range m.outBinds {
+		b := &m.binds[i]
+		var data []byte
+		isNull := false
+		switch b.OraTypeNum {
+		case TypeRowid, TypeURowid:
+			if v, ok := r.ReadStr(false); ok {
+				data = []byte(v)
+			} else {
+				isNull = true
+			}
+		case TypeClob, TypeBlob, TypeBfile, TypeCursor, TypeObject, TypeJSON, TypeVector:
+			return fmt.Errorf("oracle: OUT bind %d: %s OUT parameters are not supported", i+1, (&Column{OraTypeNum: b.OraTypeNum}).TypeName())
+		default:
+			data = r.ReadRawBytesAndLength()
+			if data == nil {
+				isNull = true
+			} else if b.CSForm == CSFormNChar {
+				data = []byte(tns.DecodeUTF16BE(data))
+			}
+		}
+		actual := r.ReadSB4()
+		if r.Err() != nil {
+			return r.Err()
+		}
+		if actual < 0 && b.OraTypeNum == TypeBoolean {
+			isNull = true
+		}
+		if !isNull {
+			s.outValues[i] = append([]byte(nil), data...)
+			s.outNull[i] = false
+		} else {
+			s.outValues[i] = nil
+			s.outNull[i] = true
+		}
+	}
+	m.rowIndex++
+	return r.Err()
+}
+
 func (m *messageWithData) processDescribeInfo(r *tns.ReadBuffer) error {
 	s := m.stmt
+	if err := m.describeInto(r, s); err != nil {
+		return err
+	}
+	if s.requiresDefine {
+		// Rows returned by this pass carry LOB locators; discard them, the
+		// define pass will re-fetch with the converted types.
+		m.discardRows = true
+	}
+	return nil
+}
+
+// describeInto parses describe information into the given statement.
+func (m *messageWithData) describeInto(r *tns.ReadBuffer, s *Statement) error {
 	r.SkipUB4() // max row size
 	numColumns := r.ReadUB4()
 	if numColumns > 0 {
@@ -468,16 +617,14 @@ func (m *messageWithData) processDescribeInfo(r *tns.ReadBuffer) error {
 	r.SkipUB4()             // dcbmxpr
 	r.SkipBytesWithLength() // dcbqcky
 	s.columns = cols
-	if s.requiresDefine {
-		// Rows returned by this pass carry LOB locators; discard them, the
-		// define pass will re-fetch with the converted types.
-		m.discardRows = true
-	}
 	return r.Err()
 }
 
 func (m *messageWithData) processRowData(r *tns.ReadBuffer) error {
 	s := m.stmt
+	if !m.inFetch && len(m.outBinds) > 0 {
+		return m.processOutBinds(r)
+	}
 	deliver := m.sink != nil && !m.discardRows && m.inFetch
 	for i := range s.columns {
 		col := &s.columns[i]
@@ -651,7 +798,7 @@ func (m *executeMessage) write(w *tns.WriteBuffer) {
 	}
 	if s.requiresDefine {
 		options |= execOptionDefine
-	} else if !m.parseOnly {
+	} else if !m.parseOnly && !s.isChild {
 		execFlags |= execFlagsImplicitResultset
 		options |= execOptionExecute
 	}
@@ -793,7 +940,18 @@ func (m *executeMessage) write(w *tns.WriteBuffer) {
 func (m *executeMessage) writeBindParams(w *tns.WriteBuffer) {
 	for i := range m.binds {
 		b := &m.binds[i]
-		writeColumnMetadata(w, b.OraTypeNum, b.CSForm, b.BufferSize)
+		bufSize := b.BufferSize
+		if m.stmt.kind == KindPLSQL {
+			// The bind may be OUT / IN OUT: size string and raw buffers to
+			// the server maximum so returned values fit.
+			switch b.OraTypeNum {
+			case TypeVarchar, TypeChar, TypeRaw:
+				if bufSize < w.Caps().MaxStringSize {
+					bufSize = w.Caps().MaxStringSize
+				}
+			}
+		}
+		writeColumnMetadata(w, b.OraTypeNum, b.CSForm, bufSize)
 	}
 	maxString := w.Caps().MaxStringSize
 	isLong := func(b *BindColumn) bool {

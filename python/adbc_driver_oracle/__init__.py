@@ -71,6 +71,18 @@ class DatabaseOptions(enum.Enum):
     #: NUMBER -> Arrow policy: "auto" (default), "decimal", "double", "string".
     NUMBER_MODE = "adbc.oracle.number_mode"
 
+    #: INTERVAL -> Arrow policy: "monthdaynano" (default), "duration", "string".
+    INTERVAL_MODE = "adbc.oracle.interval_mode"
+
+    #: DATE -> Arrow policy: "timestamp" (default) or "date32".
+    DATE_MODE = "adbc.oracle.date_mode"
+
+    #: Approximate maximum bytes per Arrow record batch (0 = unlimited).
+    BATCH_BYTES = "adbc.oracle.batch_bytes"
+
+    #: Set to "true" to disable out-of-band (TCP urgent) cancellation breaks.
+    DISABLE_OOB = "adbc.oracle.disable_oob"
+
     #: Session TIME_ZONE (default "+00:00" so TIMESTAMP WITH LOCAL TIME
     #: ZONE values arrive as UTC).
     SESSION_TIME_ZONE = "adbc.oracle.session_time_zone"
@@ -101,6 +113,15 @@ class ConnectionOptions(enum.Enum):
 
     #: NUMBER -> Arrow policy: "auto", "decimal", "double", "string".
     NUMBER_MODE = "adbc.oracle.number_mode"
+
+    #: INTERVAL -> Arrow policy: "monthdaynano", "duration", "string".
+    INTERVAL_MODE = "adbc.oracle.interval_mode"
+
+    #: DATE -> Arrow policy: "timestamp" or "date32".
+    DATE_MODE = "adbc.oracle.date_mode"
+
+    #: Approximate maximum bytes per Arrow record batch.
+    BATCH_BYTES = "adbc.oracle.batch_bytes"
 
     #: End-to-end tracing attributes (``V$SESSION.MODULE`` etc.).
     MODULE = "adbc.oracle.module"
