@@ -1014,7 +1014,7 @@ def test_number_mode_option(oracle_server):
 
 def test_plsql_out_and_inout_binds(oracle_server):
     """OUT / IN OUT binds are returned as a one-row result set whose fields
-    carry ORACLE:parameter_type metadata (Columnar-compatible)."""
+    carry ORACLE:parameter_type metadata."""
     with _connect(oracle_server) as conn, conn.cursor() as cur:
         cur.execute(
             "BEGIN :doubled := :n * 2; :greeting := 'hello ' || :greeting; :when := DATE '2024-01-02'; END;",

@@ -983,7 +983,7 @@ func outBindColumns(st *ttc.Statement, binds []ttc.BindColumn, bound *arrow.Sche
 }
 
 // recordFromOutBinds builds the one-row result set carrying PL/SQL OUT /
-// IN OUT bind values (Columnar-compatible: metadata ORACLE:parameter_type).
+// IN OUT bind values (field metadata ORACLE:parameter_type = OUT / IN OUT).
 func recordFromOutBinds(alloc memory.Allocator, st *ttc.Statement, binds []ttc.BindColumn, bound *arrow.Schema, opts typeOptions) (arrow.Record, error) {
 	cols := outBindColumns(st, binds, bound)
 	dirs := st.OutBindDirs()

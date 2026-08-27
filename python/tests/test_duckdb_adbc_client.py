@@ -1,5 +1,5 @@
-"""Tier-3 integration test #2: DuckDB's ``adbc`` community extension (by
-Columnar, https://github.com/columnar-tech/duckdb-adbc-client) driving
+"""Tier-3 integration test #2: DuckDB's ``adbc`` community extension
+(``INSTALL adbc FROM community``) driving
 this driver through an ADBC *connection profile*:
 
     duckdb ──adbc (profile://)──▶ libadbc_driver_oracle ──TNS/TTC──▶ Oracle

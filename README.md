@@ -92,7 +92,7 @@ with oracle.connect(
 
 #### Alternative: drive `adbc_driver_manager` directly
 
-If you prefer the [adbc-quickstarts](https://github.com/columnar-tech/adbc-quickstarts)
+If you prefer the generic [ADBC driver manager](https://arrow.apache.org/adbc/current/python/driver_manager.html)
 idiom — passing the driver to `adbc_driver_manager.dbapi.connect` rather
 than going through our wrapper — point at the bundled shared library via
 `_driver_path()`:
@@ -183,10 +183,9 @@ SELECT * FROM adbc_insert(getvariable('ora')::BIGINT, 'ORDERS_COPY', (SELECT * F
 
 `python/tests/test_adbc_scanner.py` covers both directions.
 
-### DuckDB via connection profiles (Columnar's `adbc` extension)
+### DuckDB via connection profiles (the `adbc` community extension)
 
-Columnar's [`adbc`](https://github.com/columnar-tech/duckdb-adbc-client)
-community extension (see the
+DuckDB's `adbc` community extension (`INSTALL adbc FROM community`; see the
 [GizmoSQL guide](https://docs.gizmosql.com/adbc_duckdb_extension/))
 resolves databases through ADBC connection profiles — no credentials in
 your SQL — and additionally supports writes (`INSERT`, `COPY`,
@@ -291,8 +290,7 @@ with oracle.connect(
 ### PL/SQL: OUT / IN OUT binds and implicit result sets
 
 A PL/SQL block's `OUT` / `IN OUT` binds come back as a **one-row result
-set** (the Arrow C Data Interface can't mutate bound input, so this
-matches Columnar's convention); each field carries
+set** (the Arrow C Data Interface can't mutate bound input); each field carries
 `ORACLE:parameter_type` = `OUT` / `IN OUT` metadata. Bind a typed
 placeholder to choose the return type — an untyped `None` returns text:
 
