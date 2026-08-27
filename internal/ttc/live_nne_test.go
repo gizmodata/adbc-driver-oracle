@@ -2,8 +2,12 @@ package ttc
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"os"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/gizmodata/adbc-driver-oracle/internal/tns"
 )
@@ -14,6 +18,16 @@ func TestLiveNNE(t *testing.T) {
 		host = h
 	}
 	port := 1523
+	if p := os.Getenv("ORACLE_NNE_PORT"); p != "" {
+		port, _ = strconv.Atoi(p)
+	}
+	// Requires an Oracle whose listener mandates NNE (see the container
+	// recipe in CLAUDE.md); skip when nothing is listening.
+	probe, derr := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", host, port), 2*time.Second)
+	if derr != nil {
+		t.Skipf("no NNE-required Oracle at %s:%d: %v", host, port, derr)
+	}
+	probe.Close()
 	cfg := &Config{
 		Addresses:   []Address{{Host: host, Port: port}},
 		ServiceName: "FREEPDB1",
