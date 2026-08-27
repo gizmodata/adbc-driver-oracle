@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-08-27
+
+### Added
+
+- `NOTICE` file with full third-party attribution and an explicit
+  independent-reimplementation / trademark statement; it now ships inside
+  the wheel (`dist-info/licenses/`).
+- README "Provenance & licensing" and "Trademarks" sections and a
+  not-affiliated-with-Oracle disclaimer.
+
 ## [0.4.0] - 2026-08-27
 
 ### Added
@@ -115,7 +125,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   through the c-shared driver (GizmoSQL / DuckDB are test-only
   dependencies).
 
-[Unreleased]: https://github.com/gizmodata/adbc-driver-oracle/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/gizmodata/adbc-driver-oracle/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/gizmodata/adbc-driver-oracle/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/gizmodata/adbc-driver-oracle/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/gizmodata/adbc-driver-oracle/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/gizmodata/adbc-driver-oracle/compare/v0.1.2...v0.2.0

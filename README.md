@@ -2,6 +2,8 @@
 
 **An [Apache Arrow ADBC](https://arrow.apache.org/adbc/) driver for [Oracle Database](https://www.oracle.com/database/) — pure Go, no Oracle Client libraries required.**
 
+> An independent, open-source project. Not affiliated with, endorsed by, or sponsored by Oracle Corporation. "Oracle" and "Oracle Database" are trademarks of Oracle Corporation, used here only to describe compatibility.
+
 [<img src="https://img.shields.io/badge/GitHub-gizmodata%2Fadbc--driver--oracle-blue.svg?logo=Github">](https://github.com/gizmodata/adbc-driver-oracle)
 [![CI](https://github.com/gizmodata/adbc-driver-oracle/actions/workflows/ci.yml/badge.svg)](https://github.com/gizmodata/adbc-driver-oracle/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/gizmodata/adbc-driver-oracle.svg)](https://pkg.go.dev/github.com/gizmodata/adbc-driver-oracle)
@@ -615,12 +617,41 @@ adbc-driver-oracle/
 └── .github/         — CI: go test, python tests (Oracle Free + GizmoSQL services), wheel matrix, PyPI publish
 ```
 
-## Credits
+## Provenance & licensing
 
-- Protocol reference: [`oracle/python-oracledb`](https://github.com/oracle/python-oracledb)
-  thin mode (Apache-2.0 / UPL) and [`sijms/go-ora`](https://github.com/sijms/go-ora) (MIT)
-- ADBC framework: [Apache Arrow ADBC](https://github.com/apache/arrow-adbc) (Apache-2.0)
+This is an **independent, from-scratch reimplementation** of a client for
+Oracle Database's TNS/TTC network protocol, written in Go. It contains **no
+Oracle Corporation source code** and links against **no Oracle Corporation
+libraries** — that's the whole point (no Instant Client). Network protocols
+and the interfaces needed for interoperability are not, in themselves,
+proprietary to any vendor.
+
+The wire behavior was implemented by reference to **publicly available,
+openly licensed** source — no confidential specification, non-public
+documentation, or binary disassembly was used:
+
+- [`oracle/python-oracledb`](https://github.com/oracle/python-oracledb) —
+  Oracle's *own* open-source driver, whose "thin mode" speaks the same
+  protocol, published by Oracle under a dual **UPL 1.0 / Apache-2.0** license.
+  It is the authoritative public reference for the protocol.
+- [`sijms/go-ora`](https://github.com/sijms/go-ora) — a community pure-Go
+  Oracle client (**MIT**); the Native Network Encryption negotiation was
+  reimplemented by reference to it.
+- [Apache Arrow ADBC](https://github.com/apache/arrow-adbc) and
+  [Apache Arrow Go](https://github.com/apache/arrow-go) (**Apache-2.0**) —
+  the ADBC framework and Arrow libraries.
+
+See [`NOTICE`](NOTICE) for full attribution.
+
+## Trademarks
+
+Oracle and Oracle Database are registered trademarks of Oracle Corporation.
+**adbc-driver-oracle is not affiliated with, endorsed by, or sponsored by
+Oracle Corporation.** References to "Oracle Database" identify the software
+this driver interoperates with and are nominative fair use.
 
 ## License
 
-[MIT](https://github.com/gizmodata/adbc-driver-oracle/blob/main/LICENSE). Protocol reference credits are listed above.
+[MIT](https://github.com/gizmodata/adbc-driver-oracle/blob/main/LICENSE) —
+Copyright (c) 2026 GizmoData LLC. See [`NOTICE`](NOTICE) for third-party
+attributions.

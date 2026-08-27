@@ -1,0 +1,58 @@
+adbc-driver-oracle
+Copyright (c) 2026 GizmoData LLC
+
+This product is licensed under the MIT License (see the LICENSE file).
+
+------------------------------------------------------------------------------
+Independent reimplementation
+------------------------------------------------------------------------------
+
+adbc-driver-oracle is an independent, clean-room-style reimplementation of a
+client for the Oracle Database network protocol (Transparent Network
+Substrate / Two-Task Common, "TNS/TTC"), written from scratch in Go. It
+contains no source code from Oracle Corporation and links against no Oracle
+Corporation libraries. Network protocols and the interfaces required for
+interoperability are not, in themselves, the intellectual property this
+project claims or copies.
+
+The wire-protocol behavior was implemented by reference to publicly available,
+openly licensed source code, principally:
+
+  * oracle/python-oracledb — Oracle's own open-source Python driver, whose
+    "thin mode" implements the same protocol and is published by Oracle
+    Corporation under a dual Universal Permissive License (UPL) 1.0 /
+    Apache License 2.0. See https://github.com/oracle/python-oracledb
+    Portions of this project's protocol logic (packet framing, data-type
+    encodings, authentication and Advanced Networking negotiation) were
+    reimplemented in Go by studying that reference. Where that constitutes a
+    derivative work, it is used under the Apache License, Version 2.0; a copy
+    of that license is available at http://www.apache.org/licenses/LICENSE-2.0
+    Changes: the code was rewritten in Go against the Apache Arrow ADBC
+    interfaces; it is not a copy or translation of any single file.
+
+  * sijms/go-ora — a community pure-Go Oracle client published under the MIT
+    License. See https://github.com/sijms/go-ora
+    The Native Network Encryption (Advanced Networking Option) negotiation and
+    cipher/checksum constructions were reimplemented by reference to it.
+
+  * apache/arrow-adbc and apache/arrow-go — the ADBC framework and Apache
+    Arrow Go libraries, published under the Apache License, Version 2.0.
+    See https://github.com/apache/arrow-adbc and
+    https://github.com/apache/arrow-go
+
+No confidential Oracle Corporation specification, non-public documentation, or
+disassembly of any Oracle Corporation binary was used in creating this
+software.
+
+------------------------------------------------------------------------------
+Trademarks
+------------------------------------------------------------------------------
+
+Oracle and Oracle Database are registered trademarks of Oracle Corporation.
+Java is a registered trademark of Oracle Corporation. All other trademarks are
+the property of their respective owners.
+
+adbc-driver-oracle is not affiliated with, endorsed by, sponsored by, or
+otherwise associated with Oracle Corporation. References to "Oracle Database"
+describe the software this driver interoperates with, and are nominative fair
+use for the sole purpose of identifying that compatibility.

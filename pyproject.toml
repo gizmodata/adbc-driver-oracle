@@ -3,7 +3,7 @@ name = "adbc-driver-oracle"
 description = "An Apache Arrow ADBC driver for Oracle Database — pure Go, no Oracle Client libraries required."
 authors = [{ name = "GizmoData", email = "support@gizmodata.com" }]
 license = "MIT"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "NOTICE"]
 readme = "README.md"
 requires-python = ">=3.10"
 dynamic = ["version"]

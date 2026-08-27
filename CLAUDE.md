@@ -198,3 +198,18 @@ the Quack / gizmosql-adbc batteries when adding features.
   `python/adbc_driver_oracle/_version.py`, and `CHANGELOG.md` in sync.
   Tag pushes build wheels, publish to PyPI, and create a GitHub Release
   with the CHANGELOG section as notes.
+
+## Provenance / legal (keep this posture)
+
+Independent, from-scratch Go reimplementation of the Oracle TNS/TTC protocol.
+No Oracle source code, no Oracle libraries, no confidential spec or binary
+disassembly — everything traces to publicly, openly licensed sources
+(`python-oracledb` thin, Apache-2.0/UPL, Oracle's own; `go-ora`, MIT; Apache
+Arrow ADBC/Go, Apache-2.0). Attribution lives in `NOTICE` (shipped in the
+wheel via `license-files`/`MANIFEST.in`). Keep the public framing on value
+("no Instant Client, pip-installable, Arrow-native") and clean provenance,
+never "reverse-engineered Oracle's secrets." Describe NNE factually ("works
+with servers requiring Native Network Encryption"), don't headline it as
+breaking Oracle crypto. Never use Oracle's logo or imply endorsement; the
+README carries the trademark disclaimer. Don't commit customer creds or
+live-customer tests.
