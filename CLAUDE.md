@@ -206,9 +206,12 @@ disassembly — everything traces to publicly, openly licensed sources
 (`python-oracledb` thin, Apache-2.0/UPL, Oracle's own; `go-ora`, MIT; Apache
 Arrow ADBC/Go, Apache-2.0). Attribution lives in `NOTICE` (shipped in the
 wheel via `license-files`/`MANIFEST.in`). Keep the public framing on value
-("no Instant Client, pip-installable, Arrow-native") and clean provenance,
-never "reverse-engineered Oracle's secrets." Describe NNE factually ("works
-with servers requiring Native Network Encryption"), don't headline it as
-breaking Oracle crypto. Never use Oracle's logo or imply endorsement; the
+("no Instant Client, pip-installable, Arrow-native") and clean provenance:
+an independent Go implementation built from openly-licensed references. Frame
+NNE affirmatively — a client-side implementation of Oracle's documented
+Advanced Networking negotiation, where client and server agree on cipher and
+session keys via Diffie-Hellman; we implement the client half of that
+handshake. Keep it at "works with servers requiring Native Network
+Encryption." Never use Oracle's logo or imply endorsement; the
 README carries the trademark disclaimer. Don't commit customer creds or
 live-customer tests.
