@@ -150,6 +150,33 @@ with oracle.connect(uri=oracle_uri) as src, \
 live Oracle + GizmoSQL pair in CI; GizmoSQL is a test-only dependency —
 the driver itself has no GizmoSQL code.)
 
+**Tuning batch size for wide tables.** Each Arrow record batch becomes one
+Flight SQL `DoPut` message on the GizmoSQL side, and the GizmoSQL driver's
+gRPC client caps messages at 16 MiB by default. With the Oracle default of
+65,536 rows per batch, a table with wide rows (~250 bytes/row or more)
+overflows that cap:
+
+```
+InternalError: INTERNAL: [GizmoSQL] [FlightSQL] trying to send message larger
+than max (54101430 vs. 16777216) (ResourceExhausted; ExecuteIngest)
+```
+
+Fix it by capping the batch size in bytes with `batch_bytes` (URI parameter
+or `adbc.oracle.batch_bytes` in `db_kwargs`) — 8 MiB keeps every batch
+comfortably under the cap regardless of row width, and uses less memory on
+both ends:
+
+```python
+src = oracle.connect(uri=oracle_uri + "?batch_bytes=8388608")
+# or, equivalently:
+src = oracle.connect(uri=oracle_uri, db_kwargs={"adbc.oracle.batch_bytes": str(8 * 1024 * 1024)})
+```
+
+(`batch_size=N` caps rows per batch instead, if you would rather size by
+row count.) Alternatively, or additionally, raise the GizmoSQL client's gRPC
+cap with `adbc.flight.sql.client_option.with_max_msg_size` — see the
+[GizmoSQL driver README](https://github.com/gizmodata/gizmosql-adbc#tuning-bulk-ingest-batch-size).
+
 ### DuckDB / GizmoSQL ↔ Oracle via `adbc_scanner`
 
 Because the driver is a plain ADBC c-shared library, DuckDB — and

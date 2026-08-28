@@ -6,6 +6,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- README: document tuning `batch_bytes` / `batch_size` when streaming wide
+  tables into GizmoSQL (the Flight SQL client's 16 MiB gRPC message cap).
+
 ## [0.4.2] - 2026-08-27
 
 ### Added
