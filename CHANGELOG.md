@@ -6,7 +6,52 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.0-rc1] - 2026-09-01
+
+First release candidate for 1.0.0 — the driver leaves alpha status.
+
+### Fixed
+
+- **Security — `adbc.oracle.nne=required` now fails closed.** Previously
+  the client-side NNE level was only honored when the *server* demanded
+  encryption: against a server that did not, `required` silently
+  proceeded with application data (SQL text and results) in cleartext.
+  Now `required` (and `requested`) drive the Advanced Networking
+  negotiation from the client on the first connect pass, and `required`
+  refuses the connection (ORA-12660) whenever the negotiated protection
+  is missing — including against servers with
+  `SQLNET.ENCRYPTION_SERVER=REJECTED`. A TLS (`tcps`) channel satisfies
+  the requirement. Verified at the wire-byte level in the test suite
+  (`test_nne.py::test_wire_bytes_are_encrypted_with_required`).
+
+### Added
+
+- Read-only connection options `adbc.oracle.nne_active` ("true"/"false")
+  and `adbc.oracle.nne_algorithms` (e.g. "AES256,SHA512") so an
+  encrypted session is independently verifiable from the application.
+  With NNE actually active, Oracle's own
+  `V$SESSION_CONNECT_INFO.NETWORK_SERVICE_BANNER` also lists the
+  encryption / crypto-checksumming service adapters.
+- NNE test coverage: a client-level × server-level negotiation matrix
+  (accepted/requested/required/rejected against accepting, requiring and
+  rejecting servers), fail-closed unit tests, and a TCP-proxy test that
+  asserts no SQL text or result bytes appear on the wire under
+  `required`.
+
 ### Changed
+
+- `adbc.oracle.batch_bytes` now defaults to **8 MiB** (was unlimited),
+  so a single Arrow record batch always fits under common transport
+  limits — in particular Flight SQL's 16 MiB gRPC message cap when
+  streaming wide tables straight into `adbc_ingest` on another driver.
+  Batches are still capped at `batch_size` rows (default 65,536); set
+  `batch_bytes=0` to restore unlimited batches.
+- `adbc.oracle.nne=requested` now negotiates encryption with any server
+  that accepts it (previously it behaved like `accepted`).
+- Statement cancellation falls back to in-band interrupt markers (not
+  TCP out-of-band breaks) on connections configured with
+  `nne=requested`/`required`, matching existing behavior on
+  NNE-required servers.
 - README: document tuning `batch_bytes` / `batch_size` when streaming wide
   tables into GizmoSQL (the Flight SQL client's 16 MiB gRPC message cap).
 

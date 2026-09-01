@@ -64,6 +64,44 @@ type Security struct {
 // Active reports whether any protection is negotiated.
 func (s *Security) Active() bool { return s != nil && (s.cipher != nil || s.hash != nil) }
 
+// EncryptionActive reports whether packet payloads are encrypted.
+func (s *Security) EncryptionActive() bool { return s != nil && s.cipher != nil }
+
+// ChecksumActive reports whether packet payloads carry a keyed checksum.
+func (s *Security) ChecksumActive() bool { return s != nil && s.hash != nil }
+
+// EncryptionAlgorithmName maps a negotiated encryption id to its
+// sqlnet.ora-style name ("" for none/unknown).
+func EncryptionAlgorithmName(id int) string {
+	switch id {
+	case EncryptAES128:
+		return "AES128"
+	case EncryptAES192:
+		return "AES192"
+	case EncryptAES256:
+		return "AES256"
+	}
+	return ""
+}
+
+// ChecksumAlgorithmName maps a negotiated checksum id to its
+// sqlnet.ora-style name ("" for none/unknown).
+func ChecksumAlgorithmName(id int) string {
+	switch id {
+	case ChecksumMD5:
+		return "MD5"
+	case ChecksumSHA1:
+		return "SHA1"
+	case ChecksumSHA512:
+		return "SHA512"
+	case ChecksumSHA256:
+		return "SHA256"
+	case ChecksumSHA384:
+		return "SHA384"
+	}
+	return ""
+}
+
 // Overhead is the maximum number of bytes added to a payload.
 func (s *Security) Overhead() int {
 	if !s.Active() {

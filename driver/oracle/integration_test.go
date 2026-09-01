@@ -347,3 +347,54 @@ func TestCancelViaContext(t *testing.T) {
 	require.NoError(t, err)
 	readAll(t, rr)
 }
+
+// The batch_bytes default must be the Flight-safe 8 MiB cap (a single
+// batch then always fits under Flight SQL's 16 MiB gRPC message limit),
+// with an explicit 0 restoring unlimited batches.
+func TestBatchBytesDefault(t *testing.T) {
+	conn := openConn(t, nil)
+	got, err := conn.(adbc.GetSetOptions).GetOption(OptionBatchBytes)
+	require.NoError(t, err)
+	require.Equal(t, "8388608", got)
+
+	conn0 := openConn(t, map[string]string{OptionBatchBytes: "0"})
+	got, err = conn0.(adbc.GetSetOptions).GetOption(OptionBatchBytes)
+	require.NoError(t, err)
+	require.Equal(t, "0", got)
+}
+
+// adbc.oracle.nne=required must produce an encrypted session even against
+// a server that does not itself require NNE, and the session must report
+// it via the read-only nne_active / nne_algorithms options.
+func TestNNERequiredNegotiatesAndReports(t *testing.T) {
+	conn := openConn(t, map[string]string{OptionNNE: "required"})
+	opts := conn.(adbc.GetSetOptions)
+	active, err := opts.GetOption(OptionNNEActive)
+	require.NoError(t, err)
+	require.Equal(t, "true", active)
+	algos, err := opts.GetOption(OptionNNEAlgorithms)
+	require.NoError(t, err)
+	require.Contains(t, algos, "AES")
+	t.Logf("negotiated: %s", algos)
+
+	// The encrypted session must actually work.
+	stmt, err := conn.NewStatement()
+	require.NoError(t, err)
+	defer stmt.Close()
+	require.NoError(t, stmt.SetSqlQuery("SELECT COUNT(*) AS n FROM (SELECT LEVEL FROM DUAL CONNECT BY LEVEL <= 10000)"))
+	rr, _, err := stmt.ExecuteQuery(context.Background())
+	require.NoError(t, err)
+	recs := readAll(t, rr)
+	require.Len(t, recs, 1)
+	recs[0].Release()
+
+	// The default (accepted) stays unencrypted against this server and
+	// reports that truthfully.
+	plain := openConn(t, nil)
+	active, err = plain.(adbc.GetSetOptions).GetOption(OptionNNEActive)
+	require.NoError(t, err)
+	require.Equal(t, "false", active)
+	algos, err = plain.(adbc.GetSetOptions).GetOption(OptionNNEAlgorithms)
+	require.NoError(t, err)
+	require.Equal(t, "", algos)
+}

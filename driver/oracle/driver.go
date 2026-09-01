@@ -266,6 +266,17 @@ func (c *connectionImpl) GetOption(key string) (string, error) {
 		return c.cfg.types.dateMode, nil
 	case OptionBatchBytes:
 		return strconv.FormatInt(c.cfg.batchBytes, 10), nil
+	case OptionNNEActive:
+		if _, _, active := c.conn.NNEInfo(); active {
+			return "true", nil
+		}
+		return "false", nil
+	case OptionNNEAlgorithms:
+		enc, chk, active := c.conn.NNEInfo()
+		if !active {
+			return "", nil
+		}
+		return enc + "," + chk, nil
 	case OptionUseExtensionTypes:
 		if c.cfg.types.useExtensionTypes {
 			return adbc.OptionValueEnabled, nil

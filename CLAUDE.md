@@ -120,22 +120,38 @@ without a listener on localhost:1521.
   binds, binding or ingesting object types, Kerberos/RADIUS network
   auth, DRCP, password-protected wallet keys.
 - Native Network Encryption (`internal/tns/ano.go`, `security.go`):
-  ANO negotiation runs after ACCEPT when the server sets the NA-required
-  flag. Two-phase connect — first pass sends DisableNA (proven safe for
-  all servers, zero regression); if the ACCEPT reports NA-required and
-  the user allows NNE, close and reconnect with NA enabled, run the ANO
-  negotiation (DH key exchange), then install packet AES-CBC + keyed-hash
-  protection on the transport. Must reset `caps` before the retry so the
-  fresh CONNECT is 2-byte-framed. The checksum keystream evolves per DATA
+  who initiates depends on the client level. At `accepted` (default)
+  two-phase connect — first pass sends DisableNA (proven safe for all
+  servers, zero regression); if the ACCEPT reports NA-required and the
+  user allows NNE, close and reconnect with NA enabled. At
+  `requested`/`required` the *first* pass enables NA and always runs the
+  ANO negotiation after ACCEPT — servers negotiate even without setting
+  the NA flag in ACCEPT (verified: default/ACCEPTED servers encrypt for
+  a requesting client; REJECTED servers answer the encryption service
+  with an ORA-12660 error code, no hang). `required` additionally fails
+  closed in `Conn.verifyNNERequirement` (before authenticate) if the
+  transport ended up without the required cipher/hash — never assume the
+  negotiation happened. `Conn.NNEInfo()` → driver read-only options
+  `adbc.oracle.nne_active`/`nne_algorithms`. Negotiation then DH key
+  exchange installs packet AES-CBC + keyed-hash protection on the
+  transport. Must reset `caps` before an ANO reconnect so the fresh
+  CONNECT is 2-byte-framed. The checksum keystream evolves per DATA
   packet and re-inits at every marker/reset boundary (`Security.Reset()`
   in `Conn.reset()`, *before* any post-reset packet is read/unwrapped) —
   getting that ordering wrong desyncs on the first error. Markers/control
-  packets are never encrypted. **OOB breaks are disabled for the whole NNE
-  pass** — a raw TCP urgent byte bypasses the encrypted channel and some
-  servers reset/hang on it; the local slim container tolerated it, so this
-  needs a server that both requires NNE and enforces that behavior to
-  reproduce. Cancellation over NNE uses in-band interrupt markers. Local
-  NNE-required container: add a `sqlnet.ora` via the image init hook.
+  packets are never encrypted. **OOB breaks are disabled for any pass
+  that may end up encrypted** (including client `requested`/`required`) —
+  a raw TCP urgent byte bypasses the encrypted channel and some servers
+  reset/hang on it. Cancellation over NNE uses in-band interrupt markers.
+  Local NNE containers: `oracle-nne` (:1523, sqlnet REQUIRED) and
+  `oracle-nne-rejected` (:1524, sqlnet REJECTED) — same gvenzl image with
+  a `sqlnet.ora` appended via a `/container-entrypoint-initdb.d` script
+  (`SQLNET.ENCRYPTION_SERVER = REQUIRED|REJECTED`,
+  `SQLNET.CRYPTO_CHECKSUM_SERVER = ...`). Tests: `internal/ttc`
+  `TestLiveNNE*` (env `ORACLE_NNE_HOST/PORT`, `ORACLE_NNE_REJECTED_HOST/
+  PORT`), python `test_nne.py` (`ADBC_ORACLE_NNE_URI`,
+  `ADBC_ORACLE_NNE_REJECTED_URI`; the wire-bytes proxy test runs against
+  the standard container).
 - Object types (`internal/ttc/objtype.go`, `objimage.go`, driver
   `objects.go`): type metadata comes from ALL_TYPES / ALL_TYPE_ATTRS /
   ALL_COLL_TYPES (not dbms_pickler — it needs a REF CURSOR OUT bind),

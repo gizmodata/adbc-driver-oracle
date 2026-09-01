@@ -26,10 +26,10 @@ Distributed as:
 - a c-shared library (`libadbc_driver_oracle.{so,dylib,dll}`) attached to each
   GitHub Release for C / C++ / Rust / R / driver-manifest consumers
 
-> **Status:** Alpha. Tested against Oracle Database 23ai Free; the wire
-> protocol targets Oracle 12.1 and later (the same range as
-> python-oracledb thin mode). See [Limitations](#limitations) for what
-> is not covered yet.
+> **Status:** Release candidate (1.0.0-rc1). Tested against Oracle
+> Database 23ai Free; the wire protocol targets Oracle 12.1 and later
+> (the same range as python-oracledb thin mode). See
+> [Limitations](#limitations) for what is not covered yet.
 
 ## Quickstart
 
@@ -150,31 +150,26 @@ with oracle.connect(uri=oracle_uri) as src, \
 live Oracle + GizmoSQL pair in CI; GizmoSQL is a test-only dependency —
 the driver itself has no GizmoSQL code.)
 
-**Tuning batch size for wide tables.** Each Arrow record batch becomes one
-Flight SQL `DoPut` message on the GizmoSQL side, and the GizmoSQL driver's
-gRPC client caps messages at 16 MiB by default. With the Oracle default of
-65,536 rows per batch, a table with wide rows (~250 bytes/row or more)
-overflows that cap:
-
-```
-InternalError: INTERNAL: [GizmoSQL] [FlightSQL] trying to send message larger
-than max (54101430 vs. 16777216) (ResourceExhausted; ExecuteIngest)
-```
-
-Fix it by capping the batch size in bytes with `batch_bytes` (URI parameter
-or `adbc.oracle.batch_bytes` in `db_kwargs`) — 8 MiB keeps every batch
-comfortably under the cap regardless of row width, and uses less memory on
-both ends:
+**Batch sizing.** Each Arrow record batch becomes one Flight SQL `DoPut`
+message on the GizmoSQL side, and the GizmoSQL driver's gRPC client caps
+messages at 16 MiB by default. The Oracle driver's batches are Flight-safe
+out of the box: a batch is capped at 65,536 rows (`batch_size`) **and**
+8 MiB (`batch_bytes`), so even very wide tables stream through without
+tripping the cap. Both knobs are tunable (URI parameter or
+`adbc.oracle.*` in `db_kwargs`):
 
 ```python
-src = oracle.connect(uri=oracle_uri + "?batch_bytes=8388608")
+src = oracle.connect(uri=oracle_uri + "?batch_bytes=4194304")   # smaller batches
 # or, equivalently:
-src = oracle.connect(uri=oracle_uri, db_kwargs={"adbc.oracle.batch_bytes": str(8 * 1024 * 1024)})
+src = oracle.connect(uri=oracle_uri, db_kwargs={"adbc.oracle.batch_bytes": str(4 * 1024 * 1024)})
 ```
 
-(`batch_size=N` caps rows per batch instead, if you would rather size by
-row count.) Alternatively, or additionally, raise the GizmoSQL client's gRPC
-cap with `adbc.flight.sql.client_option.with_max_msg_size` — see the
+`batch_bytes=0` removes the byte cap (batches then bound only by
+`batch_size` rows — a pre-1.0 default that could exceed 16 MiB for rows
+wider than ~250 bytes and fail ingest with `ResourceExhausted: trying to
+send message larger than max`). To move *more* than 8 MiB per message,
+also raise the GizmoSQL client's gRPC cap with
+`adbc.flight.sql.client_option.with_max_msg_size` — see the
 [GizmoSQL driver README](https://github.com/gizmodata/gizmosql-adbc#tuning-bulk-ingest-batch-size).
 
 ### DuckDB / GizmoSQL ↔ Oracle via `adbc_scanner`
@@ -388,11 +383,20 @@ the connect handshake it runs the encryption / checksum negotiation
 (Diffie-Hellman key exchange) and then AES-encrypts and checksums every
 packet.
 
-It is on by default at `accepted`: nothing changes for a server that
-doesn't ask for it, and a server that requires it is transparently
-negotiated (AES-256 / SHA-512 in the common case). Force it with
-`adbc.oracle.nne=required` to guarantee the session is encrypted, or turn
-it off with `rejected`:
+The `adbc.oracle.nne` level follows Oracle's sqlnet semantics:
+
+- `accepted` (default) — encrypt only when the **server** asks for it:
+  nothing changes against a server that doesn't, and a server that
+  requires NNE is transparently negotiated (AES-256 / SHA-512 in the
+  common case).
+- `requested` — the **client** initiates the negotiation; the session is
+  encrypted with any server that accepts (Oracle's server-side default),
+  and falls back to cleartext only if the server rejects NNE.
+- `required` — like `requested`, but **fails closed**: if encryption
+  cannot be negotiated the connection is refused with ORA-12660 rather
+  than ever sending data in cleartext. (A TLS `tcps` channel satisfies
+  the requirement.)
+- `rejected` — never negotiate.
 
 ```python
 # Just works against a server with SQLNET.ENCRYPTION_SERVER=REQUIRED:
@@ -401,6 +405,17 @@ with oracle.connect(uri="oracle://user:pw@exadata-scan:1521/PROD") as conn, conn
 
 # Refuse to connect unless the channel is encrypted:
 oracle.connect(uri=uri, db_kwargs={"adbc.oracle.nne": "required"})
+```
+
+Whether a session is actually protected is verifiable from the
+application via two read-only connection options — and, server-side,
+`V$SESSION_CONNECT_INFO.NETWORK_SERVICE_BANNER` lists the encryption /
+crypto-checksumming service adapters when NNE is active:
+
+```python
+with oracle.connect(uri=uri, db_kwargs={"adbc.oracle.nne": "required"}) as conn:
+    assert conn.adbc_connection.get_option(key="adbc.oracle.nne_active") == "true"
+    print(conn.adbc_connection.get_option(key="adbc.oracle.nne_algorithms"))  # e.g. AES256,SHA256
 ```
 
 Supported: AES-128/192/256 encryption and MD5 / SHA-1 / SHA-256 / SHA-384
@@ -459,9 +474,9 @@ descriptors are accepted in place of the `oracle://` form.
 | `adbc.oracle.number_mode`       | `auto`    | `NUMBER` → Arrow policy: `auto`, `decimal`, `double`, `string` (see [Type mapping](#type-mapping)). |
 | `adbc.oracle.interval_mode`     | `monthdaynano` | `INTERVAL` → Arrow policy: `monthdaynano`, `duration` (DAY TO SECOND), `string` (ISO 8601). |
 | `adbc.oracle.date_mode`         | `timestamp` | `DATE` → `timestamp[s]` (keeps the time of day) or `date32`.        |
-| `adbc.oracle.batch_bytes`       | `0`       | Approximate upper bound on bytes per Arrow record batch (0 = only `batch_size` applies). |
+| `adbc.oracle.batch_bytes`       | `8388608` | Approximate upper bound on bytes per Arrow record batch (8 MiB default keeps batches under Flight SQL's 16 MiB gRPC cap; 0 = only `batch_size` applies). |
 | `adbc.oracle.disable_oob`       | `false`   | Disable out-of-band (TCP urgent) breaks used for cancellation; falls back to in-band markers. |
-| `adbc.oracle.nne`               | `accepted` | Native Network Encryption / data integrity: `accepted`, `requested`, `required`, `rejected`. |
+| `adbc.oracle.nne`               | `accepted` | Native Network Encryption / data integrity: `accepted`, `requested`, `required` (fails closed if not negotiated), `rejected`. |
 | `adbc.oracle.nne_checksum`      | (=`nne`)  | Data-integrity level, if different from `nne`.                        |
 | `adbc.oracle.nne_encryption_algorithms` | (all AES) | Comma-separated encryption preference, e.g. `AES256,AES192`. |
 | `adbc.oracle.nne_checksum_algorithms`   | (all)     | Comma-separated checksum preference, e.g. `SHA512,SHA256`. |
@@ -478,7 +493,9 @@ After connecting, `adbc.oracle.batch_size`, `adbc.oracle.batch_bytes`,
 `adbc.oracle.prefetch_rows`, `adbc.oracle.number_mode`,
 `adbc.oracle.interval_mode`, `adbc.oracle.date_mode` and the end-to-end tracing attributes
 `adbc.oracle.module` / `.action` / `.client_info` / `.client_identifier`
-can be changed per connection.
+can be changed per connection. The read-only connection options
+`adbc.oracle.nne_active` / `adbc.oracle.nne_algorithms` report whether the
+session is protected by Native Network Encryption and with what.
 
 The URI is its own kwarg; everything else goes through `db_kwargs`:
 

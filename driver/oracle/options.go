@@ -71,7 +71,9 @@ const (
 	// "date32" (drops the time of day).
 	OptionDateMode = "adbc.oracle.date_mode"
 	// OptionBatchBytes caps the approximate size of an Arrow record batch
-	// in bytes (0 = unlimited; rows are still capped by batch_size).
+	// in bytes (default 8 MiB — keeps a batch under common transport
+	// limits such as gRPC's 16 MiB Flight SQL message cap; 0 = unlimited;
+	// rows are still capped by batch_size).
 	OptionBatchBytes = "adbc.oracle.batch_bytes"
 	// OptionDisableOOB disables out-of-band (TCP urgent data) breaks used
 	// for statement cancellation.
@@ -90,6 +92,14 @@ const (
 	// OptionNNEChecksumAlgorithms restricts the offered checksum algorithms
 	// (comma-separated, e.g. "SHA256,SHA512").
 	OptionNNEChecksumAlgorithms = "adbc.oracle.nne_checksum_algorithms"
+	// OptionNNEActive (read-only, connection) reports whether Native
+	// Network Encryption / data integrity is active on the session:
+	// "true" or "false".
+	OptionNNEActive = "adbc.oracle.nne_active"
+	// OptionNNEAlgorithms (read-only, connection) reports the negotiated
+	// algorithms as "<encryption>,<checksum>" (e.g. "AES256,SHA512";
+	// empty entries when a service is off, "" when NNE is inactive).
+	OptionNNEAlgorithms = "adbc.oracle.nne_algorithms"
 	// OptionUseExtensionTypes annotates JSON, object (arrow.json),
 	// SDO_GEOMETRY (geoarrow.wkb) and XMLType (arrow.opaque) columns with
 	// Arrow extension-type metadata.
@@ -187,7 +197,10 @@ var easyConnectRe = regexp.MustCompile(`^(?:(tcps?)://)?([^:/]+)(?::(\d+))?/([^?
 // parseOptions merges the URI and explicit ADBC options into a config.
 // Explicit options override URI components.
 func parseOptions(opts map[string]string) (*connConfig, error) {
-	cfg := &connConfig{batchSize: 65536, types: typeOptions{numberMode: NumberModeAuto, intervalMode: IntervalModeMonthDayNano, dateMode: DateModeTimestamp}}
+	// batchBytes defaults to 8 MiB so a single batch stays under common
+	// transport limits (e.g. Flight SQL's 16 MiB gRPC message cap) even
+	// for wide rows; set batch_bytes=0 for unlimited.
+	cfg := &connConfig{batchSize: 65536, batchBytes: 8 << 20, types: typeOptions{numberMode: NumberModeAuto, intervalMode: IntervalModeMonthDayNano, dateMode: DateModeTimestamp}}
 	cfg.ttc.ConnectTimeout = 30 * time.Second
 	cfg.ttc.FullVersion = fullVersionNum()
 	var tlsEnabled, skipVerify bool

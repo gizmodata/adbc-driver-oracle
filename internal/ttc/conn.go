@@ -50,10 +50,14 @@ type Config struct {
 	// cancellation then falls back to in-band markers).
 	DisableOOB bool
 
-	// ANO configures Native Network Encryption / data integrity. When
-	// EncryptionLevel or ChecksumLevel is >= levelAccepted (0) the driver
-	// participates in the Advanced Networking negotiation. Nil disables it
-	// (the server must then not require NNE).
+	// ANO configures Native Network Encryption / data integrity. Nil
+	// disables it (the server must then not require NNE). At the
+	// accepted level the driver negotiates only when the server demands
+	// it; at requested/required the first connect pass advertises
+	// Advanced Networking and negotiates immediately. A required level
+	// fails closed: Dial returns an error rather than proceeding in
+	// cleartext when the protection was not negotiated (TLS satisfies
+	// the requirement).
 	ANO *tns.ANOConfig
 
 	// Trace, if set, receives protocol-level debug output.
@@ -137,9 +141,20 @@ func Dial(ctx context.Context, cfg *Config) (*Conn, error) {
 	_, _ = rand.Read(idBytes)
 	c.connectionID = base64.StdEncoding.EncodeToString(idBytes)
 
+	// When the client itself asks for encryption/integrity (requested or
+	// required) the first connect pass advertises Advanced Networking and
+	// negotiates immediately, rather than waiting for the server to demand
+	// it. Any pass that may end up encrypted must not advertise
+	// out-of-band breaks (see the retry branch below).
+	clientANO := cfg.ANO != nil &&
+		(cfg.ANO.EncryptionLevel >= tns.LevelRequested || cfg.ANO.ChecksumLevel >= tns.LevelRequested)
+	if clientANO {
+		c.caps.SupportsOOB = false
+	}
+
 	var lastErr error
 	for i, addr := range cfg.Addresses {
-		err := c.connectAddress(ctx, addr, false)
+		err := c.connectAddress(ctx, addr, clientANO)
 		if errors.Is(err, errRetryWithANO) {
 			// The server requires Native Network Encryption: reconnect to
 			// the same address with ANO enabled and negotiate it. Reset the
@@ -180,6 +195,10 @@ func Dial(ctx context.Context, cfg *Config) (*Conn, error) {
 	if lastErr != nil {
 		return nil, lastErr
 	}
+	if err := c.verifyNNERequirement(); err != nil {
+		_ = c.transport.Close()
+		return nil, err
+	}
 	if err := c.authenticate(ctx); err != nil {
 		_ = c.transport.Close()
 		return nil, err
@@ -191,7 +210,44 @@ func Dial(ctx context.Context, cfg *Config) (*Conn, error) {
 var (
 	errRetryWithANO = errors.New("oracle: retry connection with Native Network Encryption")
 	errNNERequired  = &Error{Code: 12660, Message: "ORA-12660: the server requires Native Network Encryption / data integrity; enable it with adbc.oracle.nne=accepted (or higher), or connect over TLS (tcps)"}
+	// errNNENotNegotiated fails a connection closed when the client
+	// required encryption/integrity but the negotiation did not produce it.
+	errNNENotNegotiated = &Error{Code: 12660, Message: "ORA-12660: Native Network Encryption / data integrity is required by the client configuration but was not negotiated with this server; refusing to send data in cleartext (connect over TLS, or lower adbc.oracle.nne)"}
 )
+
+// verifyNNERequirement enforces adbc.oracle.nne=required (and the
+// checksum equivalent) after the connect handshake: if the required
+// protection is not active on the transport the connection must fail
+// rather than proceed in cleartext. A TLS channel already provides both
+// encryption and integrity, so tcps satisfies the requirement.
+func (c *Conn) verifyNNERequirement() error {
+	cfg := c.cfg
+	if cfg.ANO == nil || cfg.TLS != nil {
+		return nil
+	}
+	sec := c.transport.Security()
+	if cfg.ANO.EncryptionLevel == tns.LevelRequired && !sec.EncryptionActive() {
+		return errNNENotNegotiated
+	}
+	if cfg.ANO.ChecksumLevel == tns.LevelRequired && !sec.ChecksumActive() {
+		return errNNENotNegotiated
+	}
+	return nil
+}
+
+// NNEInfo reports the negotiated Native Network Encryption state:
+// algorithm names (sqlnet.ora style, "" when the service is off) and
+// whether any packet protection is active.
+func (c *Conn) NNEInfo() (encryption, checksum string, active bool) {
+	if c == nil || c.transport == nil {
+		return "", "", false
+	}
+	sec := c.transport.Security()
+	if !sec.Active() {
+		return "", "", false
+	}
+	return tns.EncryptionAlgorithmName(sec.EncryptionID), tns.ChecksumAlgorithmName(sec.ChecksumID), true
+}
 
 func fillDefaults(cfg *Config) {
 	if cfg.ConnectTimeout == 0 {
@@ -362,6 +418,11 @@ func (c *Conn) connectAddress(ctx context.Context, addr Address, allowANO bool) 
 				return errRetryWithANO
 			}
 			if allowANO {
+				// The server acknowledged Advanced Networking; run the
+				// encryption / checksum negotiation now. Without the ACK
+				// the server will not participate — Dial's
+				// verifyNNERequirement fails the session closed if the
+				// client required protection.
 				if err := c.negotiateANO(); err != nil {
 					return err
 				}

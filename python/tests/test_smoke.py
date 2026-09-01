@@ -1085,6 +1085,20 @@ def test_batch_bytes_bounds_batches(oracle_server):
         assert len(batches) > 5
 
 
+def test_batch_bytes_default_is_flight_safe(oracle_server):
+    """The default batch_bytes is 8 MiB, so a single record batch always
+    fits under Flight SQL's 16 MiB gRPC message cap even for wide rows;
+    an explicit batch_bytes=0 restores unlimited batches."""
+    import adbc_driver_oracle.dbapi as oracle
+
+    with oracle.connect(uri=oracle_server.uri) as conn:
+        assert conn.adbc_connection.get_option(key="adbc.oracle.batch_bytes") == "8388608"
+    with oracle.connect(
+        uri=oracle_server.uri, db_kwargs={"adbc.oracle.batch_bytes": "0"}
+    ) as conn:
+        assert conn.adbc_connection.get_option(key="adbc.oracle.batch_bytes") == "0"
+
+
 def test_cancel_running_statement(oracle_server):
     """cursor.adbc_cancel() from another thread interrupts a long query."""
     import threading

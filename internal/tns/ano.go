@@ -306,6 +306,12 @@ func (a *ANO) read() error {
 			return err
 		}
 		if errCode != 0 {
+			// 12660 in the encryption (2) or checksum (3) service means the
+			// levels are incompatible — e.g. the client requires Native
+			// Network Encryption and the server rejects it.
+			if errCode == 12660 && (sType == 2 || sType == 3) {
+				return errors.New("tns: ORA-12660: the required Native Network Encryption / data integrity level is incompatible with the server (the server rejects it); connect over TLS, or lower adbc.oracle.nne")
+			}
 			return fmt.Errorf("tns: ANO negotiation error ORA-%d in service %d", errCode, sType)
 		}
 		switch sType {
