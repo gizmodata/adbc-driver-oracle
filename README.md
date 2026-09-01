@@ -26,10 +26,10 @@ Distributed as:
 - a c-shared library (`libadbc_driver_oracle.{so,dylib,dll}`) attached to each
   GitHub Release for C / C++ / Rust / R / driver-manifest consumers
 
-> **Status:** Release candidate (1.0.0-rc1). Tested against Oracle
-> Database 23ai Free; the wire protocol targets Oracle 12.1 and later
-> (the same range as python-oracledb thin mode). See
-> [Limitations](#limitations) for what is not covered yet.
+> **Status:** Stable (1.0.0). Tested against Oracle Database 23ai Free;
+> the wire protocol targets Oracle 12.1 and later (the same range as
+> python-oracledb thin mode). See [Limitations](#limitations) for what
+> is not covered.
 
 ## Quickstart
 

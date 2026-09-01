@@ -6,6 +6,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-09-01
+
+First stable release. 🎉 Identical to 1.0.0-rc1 apart from the version
+metadata (classifier is now Production/Stable) — see the 1.0.0-rc1 notes
+below for everything new since 0.4.2, headlined by:
+
+- **Security:** `adbc.oracle.nne=required` fails closed (never sends
+  cleartext), with new read-only `nne_active` / `nne_algorithms`
+  connection options to verify an encrypted session.
+- **Streaming DX:** `batch_bytes` defaults to 8 MiB, so record batches
+  fit under Flight SQL's 16 MiB gRPC cap out of the box.
+
 ## [1.0.0-rc1] - 2026-09-01
 
 First release candidate for 1.0.0 — the driver leaves alpha status.

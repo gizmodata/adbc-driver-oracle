@@ -2,4 +2,4 @@ package oracle
 
 // Version is the driver version reported via GetInfo. Keep in sync with
 // python/adbc_driver_oracle/_version.py and the CHANGELOG.
-const Version = "1.0.0-rc1"
+const Version = "1.0.0"
