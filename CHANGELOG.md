@@ -20,8 +20,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - CI fails if the Linux library needs a glibc newer than 2.17, and installs both Linux wheels on Oracle
   Linux 8 (x86_64, arm64) and loads the driver there before anything is published.
-- CI pins `goimports` (x/tools v0.49.0, the last line supporting Go 1.25): `@latest` moved to a Go 1.26
-  requirement and broke every Linux Python test job.
+- CI builds with Go 1.26.9 (was 1.25; the module's `go 1.25.0` floor is unchanged) and pins `goimports`
+  (x/tools v0.52.0): an unpinned `@latest` started requiring Go 1.26 and broke every Linux Python test job.
 
 ## [1.0.0] - 2026-09-01
 

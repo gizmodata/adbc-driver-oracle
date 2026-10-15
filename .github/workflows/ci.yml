@@ -55,7 +55,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.25'
+          go-version: '1.26.9'
           cache: false
 
       - name: go vet
@@ -118,7 +118,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.25'
+          go-version: '1.26.9'
           cache: false
 
       - uses: actions/setup-python@v7
@@ -138,9 +138,8 @@ jobs:
       - name: Install goimports + clang-format (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          # Pinned: @latest moved to x/tools v0.52 (needs Go 1.26) and broke this Go 1.25 job.
-          # v0.49.x is the last x/tools line that supports Go 1.25.
-          go install golang.org/x/tools/cmd/goimports@v0.49.0
+          # Pinned: an unpinned @latest moved to x/tools v0.52 (needs Go 1.26) and broke CI on its own.
+          go install golang.org/x/tools/cmd/goimports@v0.52.0
           sudo apt-get update && sudo apt-get install -y clang-format
 
       - name: Build c-shared driver library
@@ -269,7 +268,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.25'
+          go-version: '1.26.9'
           cache: false
 
       - uses: actions/setup-python@v7
