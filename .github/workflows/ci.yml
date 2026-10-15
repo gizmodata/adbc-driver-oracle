@@ -138,7 +138,9 @@ jobs:
       - name: Install goimports + clang-format (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          go install golang.org/x/tools/cmd/goimports@latest
+          # Pinned: @latest moved to x/tools v0.52 (needs Go 1.26) and broke this Go 1.25 job.
+          # v0.49.x is the last x/tools line that supports Go 1.25.
+          go install golang.org/x/tools/cmd/goimports@v0.49.0
           sudo apt-get update && sudo apt-get install -y clang-format
 
       - name: Build c-shared driver library
