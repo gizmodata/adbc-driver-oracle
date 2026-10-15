@@ -205,10 +205,9 @@ USE ora.SALES;
 CREATE TABLE ORDERS_COPY AS SELECT * FROM memory.local_orders;   -- CTAS into Oracle
 USE memory;
 
--- push (the function API): the same, for arbitrary SQL, via the secret
-SET VARIABLE ora = adbc_connect({'secret': 'ora_secret'});
-SELECT * FROM adbc_scan(getvariable('ora')::BIGINT, 'SELECT * FROM sales.orders WHERE ROWNUM <= 10');
-SELECT * FROM adbc_insert(getvariable('ora')::BIGINT, 'ORDERS_COPY2', (SELECT * FROM local_orders), mode := 'create');
+-- the function API: arbitrary Oracle SQL and bulk inserts, on the attached database
+SELECT * FROM adbc_scan('ora', 'SELECT * FROM sales.orders WHERE ROWNUM <= 10');
+SELECT * FROM adbc_insert('ora', 'ORDERS_COPY2', (SELECT * FROM local_orders), mode := 'create');
 ```
 
 Both write paths work: `USE <attached schema>; CREATE TABLE ... AS ...` (and

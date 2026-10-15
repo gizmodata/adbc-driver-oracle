@@ -56,10 +56,10 @@ def duckdb_oracle(oracle_server):
         },
     )
     # ATTACH takes no bind parameters; the URI is a literal.
+    # The function API (adbc_scan / adbc_insert) takes the attached database's name; adbc_scanner
+    # removed adbc_connect / adbc_disconnect (connection handles) in October 2026.
     con.execute(query=f"ATTACH '{oracle_server.credential_free_uri}' AS ora (TYPE adbc)")
-    con.execute(query="SET VARIABLE ora = adbc_connect({'secret': 'ora_secret'})")
     yield con
-    con.execute(query="SELECT adbc_disconnect(getvariable('ora')::BIGINT)")
     con.execute(query="DETACH ora")
     con.close()
 
@@ -70,7 +70,7 @@ def test_duckdb_adbc_scan_pulls_from_oracle(duckdb_oracle):
     # Pull: an Oracle result set materialised inside DuckDB.
     n, first_owner = con.execute(
         query="""SELECT COUNT(*) AS n, MIN(OWNER) AS first_owner
-                 FROM adbc_scan(getvariable('ora')::BIGINT,
+                 FROM adbc_scan('ora',
                                 'SELECT OWNER, OBJECT_NAME FROM ALL_OBJECTS WHERE ROWNUM <= 5000')"""
     ).fetchone()
     assert n > 100
@@ -79,7 +79,7 @@ def test_duckdb_adbc_scan_pulls_from_oracle(duckdb_oracle):
     # Types survive the trip: Oracle NUMBER(p,s)/TIMESTAMP/VARCHAR2 become
     # DuckDB DECIMAL/TIMESTAMP/VARCHAR.
     typed = con.execute(
-        query="""DESCRIBE SELECT * FROM adbc_scan(getvariable('ora')::BIGINT,
+        query="""DESCRIBE SELECT * FROM adbc_scan('ora',
                  'SELECT CAST(1.25 AS NUMBER(10,2)) AS D, CAST(7 AS NUMBER(10)) AS I, SYSTIMESTAMP AS TS, ''x'' AS S FROM DUAL')"""
     ).fetchall()
     kinds = {name: typ for name, typ, *_ in typed}
@@ -145,7 +145,7 @@ def test_duckdb_adbc_insert_pushes_to_oracle(duckdb_oracle, oracle_server, table
 
     # Push: a DuckDB relation lands in a brand-new Oracle table.
     (inserted,) = con.execute(
-        query="""SELECT * FROM adbc_insert(getvariable('ora')::BIGINT, $table,
+        query="""SELECT * FROM adbc_insert('ora', $table,
                      (SELECT * FROM local_src), mode := 'create')""",
         parameters={"table": table_name},
     ).fetchone()
@@ -155,7 +155,7 @@ def test_duckdb_adbc_insert_pushes_to_oracle(duckdb_oracle, oracle_server, table
         # Round trip: read it back through adbc_scan ...
         (n, total, max_name) = con.execute(
             query="""SELECT COUNT(*), SUM(ID), MAX(NAME)
-                     FROM adbc_scan(getvariable('ora')::BIGINT, $sql)""",
+                     FROM adbc_scan('ora', $sql)""",
             parameters={"sql": f"SELECT id, name FROM {table_name}"},
         ).fetchone()
         assert n == rows

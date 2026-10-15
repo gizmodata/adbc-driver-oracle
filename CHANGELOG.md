@@ -20,6 +20,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - CI fails if the Linux library needs a glibc newer than 2.17, and installs both Linux wheels on Oracle
   Linux 8 (x86_64, arm64) and loads the driver there before anything is published.
+- The DuckDB `adbc_scanner` example (README) and its tests use the extension's current API: `adbc_scan` /
+  `adbc_insert` take the attached database's name (`'ora'`). The extension removed `adbc_connect` /
+  `adbc_disconnect`, so the old example and the cross-tool tests failed.
 - CI builds with Go 1.26.9 (was 1.25; the module's `go 1.25.0` floor is unchanged) and pins `goimports`
   (x/tools v0.52.0): an unpinned `@latest` started requiring Go 1.26 and broke every Linux Python test job.
 
