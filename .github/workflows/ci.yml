@@ -275,6 +275,14 @@ jobs:
         with:
           python-version: '3.12'
 
+      # Linux: build the c-shared library with `zig cc` against glibc 2.17, so the wheel's
+      # manylinux2014 tag (set in setup.py) is true. Built with the runner's gcc it needed
+      # GLIBC_2.32 and failed to load on Oracle Linux 8 (glibc 2.28) database servers.
+      - uses: mlugg/setup-zig@v2
+        if: ${{ matrix.goos == 'linux' }}
+        with:
+          version: 0.14.1
+
       - name: Install llvm-mingw (cgo C toolchain for windows/arm64)
         if: ${{ matrix.dll_only }}
         shell: bash
@@ -303,9 +311,22 @@ jobs:
           MACOSX_DEPLOYMENT_TARGET: '12.0'
 
         run: |
+          if [ "${{ matrix.goos }}" = "linux" ]; then
+            export CC="zig cc -target $([ "${{ matrix.goarch }}" = arm64 ] && echo aarch64 || echo x86_64)-linux-gnu.2.17"
+          fi
           go build -buildmode=c-shared -tags driverlib \
             -o "pkg/oracle/libadbc_driver_oracle.${{ matrix.ext }}" ./pkg/oracle
           echo "ADBC_ORACLE_LIBRARY=$PWD/pkg/oracle/libadbc_driver_oracle.${{ matrix.ext }}" >> "$GITHUB_ENV"
+
+      - name: Check the glibc ceiling (2.17, the manylinux2014 tag)
+        if: ${{ matrix.goos == 'linux' }}
+        run: |
+          MAX=$(objdump -T pkg/oracle/libadbc_driver_oracle.so | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -V | tail -1)
+          echo "highest glibc symbol version: ${MAX:-none}"
+          if [ -n "$MAX" ] && [ "$(printf '%s\n2.17\n' "$MAX" | sort -V | tail -1)" != "2.17" ]; then
+            echo "::error::libadbc_driver_oracle.so needs glibc $MAX, but the wheel is tagged manylinux2014 (2.17)"
+            exit 1
+          fi
 
       - name: Build wheel
         if: ${{ !matrix.dll_only }}
@@ -380,9 +401,51 @@ jobs:
           name: libadbc_driver_oracle-release-${{ matrix.goos }}-${{ matrix.goarch }}
           path: release-artifacts/*
 
+  oracle-linux-8:
+    # The Linux wheels must install and load on a glibc-2.28 distro (Oracle Linux 8 / RHEL 8):
+    # the database servers this driver exists for. Loading the library is the portability check
+    # (dlopen fails on a missing GLIBC_x.y symbol version); a refused connection proves it loaded.
+    name: Wheel on oracle linux 8 (${{ matrix.arch }})
+    needs: wheels
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    container: oraclelinux:8
+    steps:
+      - name: Install Python 3.12
+        run: dnf install -y -q python3.12 python3.12-pip
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: wheel-linux-${{ matrix.arch }}
+          path: dist
+
+      - name: Install the wheel and load the driver
+        run: |
+          ldd --version | head -1
+          python3.12 -m venv /tmp/venv
+          /tmp/venv/bin/pip install -q dist/*.whl
+          /tmp/venv/bin/python - <<'PY'
+          import adbc_driver_oracle.dbapi as oracle
+          try:
+              oracle.connect(uri="oracle://u:p@127.0.0.1:1/none").close()
+          except Exception as e:
+              message = str(e)
+              print(type(e).__name__, message[:300])
+              assert not any(s in message for s in ("GLIBC", "dlopen", "Could not load")), "driver library failed to load"
+          else:
+              raise SystemExit("expected a refused connection")
+          PY
+
   publish:
     name: Publish to PyPI
-    needs: wheels
+    needs: [wheels, oracle-linux-8]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     environment:
@@ -410,7 +473,7 @@ jobs:
 
   github-release:
     name: Attach c-shared libraries to GitHub Release
-    needs: wheels
+    needs: [wheels, oracle-linux-8]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:

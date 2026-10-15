@@ -54,10 +54,10 @@ class BinaryWheel(bdist_wheel):
         _python, _abi, plat = bdist_wheel.get_tag(self)
         # PyPI rejects bare ``linux_x86_64`` / ``linux_aarch64`` tags
         # (only manylinux / musllinux / specific tags are accepted), so
-        # rewrite to manylinux2014 — glibc 2.17, broadly compatible. Our
-        # Go-cgo binary links only to libc/libpthread/libdl/librt with
-        # ancient symbols, so this is honest, not optimistic. Proper
-        # auditwheel-repair-in-a-container is a future improvement.
+        # rewrite to manylinux2014 (glibc 2.17). That is only true because
+        # CI builds the Linux library with `zig cc` targeting glibc 2.17 and
+        # fails if it needs anything newer: built with the runner's gcc it
+        # needed GLIBC_2.32 and failed to load on Oracle Linux 8.
         if plat == "linux_x86_64":
             plat = "manylinux2014_x86_64"
         elif plat == "linux_aarch64":

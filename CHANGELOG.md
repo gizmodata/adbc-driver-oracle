@@ -6,6 +6,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-10-15
+
+### Fixed
+
+- **The Linux wheels load on glibc 2.17 and newer, as their `manylinux2014` tag claims.** The Linux
+  c-shared library was built with the GitHub runner's gcc and needed `GLIBC_2.32`, so on Oracle Linux 8
+  (glibc 2.28), the database servers this driver is for, pip installed the wheel and the driver then
+  failed to load (`version 'GLIBC_2.32' not found`). It is now built with `zig cc` targeting glibc 2.17.
+  Same Go code; only the C toolchain differs. The release's `.so` artifacts carry the portable build.
+
+### Changed
+
+- CI fails if the Linux library needs a glibc newer than 2.17, and installs both Linux wheels on Oracle
+  Linux 8 (x86_64, arm64) and loads the driver there before anything is published.
+
 ## [1.0.0] - 2026-09-01
 
 First stable release. 🎉 Identical to 1.0.0-rc1 apart from the version
