@@ -7,14 +7,19 @@ described in CLAUDE.md, ``oracle://scott:tiger@localhost:1521/FREEPDB1``).
 They are auto-skipped when nothing is listening on that host:port, so
 ``pytest`` still runs cleanly on machines / CI legs without Oracle.
 
-The Oracle -> GizmoSQL test additionally needs ``GIZMOSQL_URI`` (and
-``GIZMOSQL_TOKEN`` or ``GIZMOSQL_USERNAME`` / ``GIZMOSQL_PASSWORD``).
+The Oracle -> Hardcharger tests additionally need a Hardcharger server
+(https://gizmodata.com/hardcharger): the one named by
+``ADBC_ORACLE_TEST_HARDCHARGER_URI`` (CI's container), or else one started from
+the ``hardcharger`` PyPI package (``pip install -e ".[test,hardcharger]"``).
+A server named by that variable must answer, or the tests fail: they never
+skip because a configured server is down.
 """
 
 from __future__ import annotations
 
 import os
 import socket
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -97,25 +102,65 @@ def drop_table_quietly(cur, name: str) -> None:
         pass
 
 
+HARDCHARGER_MIN_VERSION = (2, 1)
+
+
 @dataclass
-class GizmoSQLServer:
-    """Connection details for a GizmoSQL server (test-only dependency)."""
+class HardchargerServer:
+    """Connection details for a Hardcharger server (test-only dependency)."""
 
     uri: str
     username: str
     password: str
+    # The Oracle driver library as the server's own file system sees it (a
+    # bind mount in CI's container); None: the local build, for a local server.
+    driver_path: str | None = None
+
+    def connect(self, autocommit: bool = False):
+        from adbc_driver_hardcharger import dbapi as hardcharger
+
+        return hardcharger.connect(
+            uri=self.uri, username=self.username, password=self.password, autocommit=autocommit
+        )
+
+
+def _wait_for_hardcharger(server: HardchargerServer, timeout: float = 120.0) -> None:
+    deadline = time.monotonic() + timeout
+    last: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            with server.connect() as conn, conn.cursor() as cur:
+                cur.execute(operation="SELECT HARDCHARGER_VERSION()")
+                (version,) = cur.fetchone()
+        except Exception as exc:  # not up yet
+            last = exc
+            time.sleep(2)
+            continue
+        major_minor = tuple(int(part) for part in version.split(".")[:2])
+        if major_minor < HARDCHARGER_MIN_VERSION:
+            pytest.fail(reason=f"Hardcharger at {server.uri} is {version}; these tests need 2.1 or later")
+        return
+    pytest.fail(reason=f"no Hardcharger answering at {server.uri} after {timeout:.0f}s: {last}")
 
 
 @pytest.fixture(scope="session")
-def gizmosql_server() -> GizmoSQLServer:
-    uri = os.environ.get("GIZMOSQL_URI")
-    if not uri:
-        pytest.skip(reason="GIZMOSQL_URI not set")
-    token = os.environ.get("GIZMOSQL_TOKEN")
-    if token:
-        return GizmoSQLServer(uri=uri, username="token", password=token)
-    return GizmoSQLServer(
-        uri=uri,
-        username=os.environ.get("GIZMOSQL_USERNAME", "gizmosql_user"),
-        password=os.environ.get("GIZMOSQL_PASSWORD", "gizmosql_password"),
+def hardcharger_server():
+    uri = os.environ.get("ADBC_ORACLE_TEST_HARDCHARGER_URI")
+    if uri:
+        server = HardchargerServer(
+            uri=uri,
+            username=os.environ.get("ADBC_ORACLE_TEST_HARDCHARGER_USERNAME", "hardcharger"),
+            password=os.environ.get("ADBC_ORACLE_TEST_HARDCHARGER_PASSWORD", "hardcharger"),
+            driver_path=os.environ.get("ADBC_ORACLE_TEST_HARDCHARGER_DRIVER_PATH"),
+        )
+        _wait_for_hardcharger(server=server)
+        yield server
+        return
+    hardcharger = pytest.importorskip(
+        "hardcharger", reason="no ADBC_ORACLE_TEST_HARDCHARGER_URI and the hardcharger package isn't installed"
     )
+    pytest.importorskip("adbc_driver_hardcharger")
+    with hardcharger.Server() as local:
+        server = HardchargerServer(uri=local.uri, username=local.username, password=local.password)
+        _wait_for_hardcharger(server=server)
+        yield server

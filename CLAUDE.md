@@ -61,18 +61,22 @@ also `tiger`). Integration tests (Go and Python) read
 container as a GitHub Actions service on the Linux legs only.
 
 Build the c-shared lib for Python tests with `make -C pkg/oracle`, then
-`ADBC_ORACLE_LIBRARY=$PWD/pkg/oracle/libadbc_driver_oracle.dylib pip install -e ".[test,gizmosql]"`
+`ADBC_ORACLE_LIBRARY=$PWD/pkg/oracle/libadbc_driver_oracle.dylib pip install -e ".[test,hardcharger]"`
 and `pytest -v`. After rebuilding the lib, re-copy it into the editable
 package: `cp pkg/oracle/libadbc_driver_oracle.dylib python/adbc_driver_oracle/`.
 
-Cross-tool tests (test-only dependencies — **no GizmoSQL code in the
-driver**): `test_oracle_to_gizmosql.py` needs `GIZMOSQL_URI` (+
-`GIZMOSQL_TOKEN` or `GIZMOSQL_USERNAME`/`GIZMOSQL_PASSWORD`), e.g.
-`docker run -d --name gizmosql --init -p 31337:31337 -e TLS_ENABLED=0 -e GIZMOSQL_PASSWORD=gizmosql_password gizmodata/gizmosql:latest`
-→ `GIZMOSQL_URI=gizmosql://localhost:31337?transport=tcp`.
-`test_adbc_scanner.py` needs the `duckdb` package and internet access
-for `INSTALL adbc_scanner FROM community`; it exercises `adbc_scan`
-(pull) and `adbc_insert` (push) against Oracle through our c-shared lib.
+Cross-tool tests (test-only dependencies — **no Hardcharger code in the
+driver**): `test_oracle_to_hardcharger.py` and the `[hardcharger]` cases of
+`test_adbc_scanner.py` need a [Hardcharger](https://gizmodata.com/hardcharger)
+2.1+ server. With `ADBC_ORACLE_TEST_HARDCHARGER_URI` set (+ `_USERNAME` /
+`_PASSWORD`, default `hardcharger`/`hardcharger`, and `_DRIVER_PATH`: this
+driver's library as the *server* sees it) they use that server and fail if it
+doesn't answer; otherwise they start one from the `hardcharger` PyPI package
+(the `[hardcharger]` extra, Python 3.11+). CI runs
+`ghcr.io/gizmodata/hardcharger:latest` with `--network host` and
+`pkg/oracle` mounted at `/drivers`. `test_adbc_scanner.py` runs every case in
+Hardcharger and in an embedded DuckDB; on DuckDB 2.0+ (every Hardcharger) the
+extension installs from the Query.Farm repository, on 1.x from community.
 
 Go-level integration tests: `go test ./...` — `internal/ttc` has raw
 wire-protocol tests, `driver/oracle` has ADBC-level ones; both skip
@@ -187,7 +191,7 @@ mapping (incl. 23ai JSON/BOOLEAN/INTERVAL/LTZ), NUMBER edge cases and
 (`get_info`/`get_table_types`/`get_table_schema`/`get_objects` with
 constraints), connection options; `test_profiles.py` / `test_manifest.py`
 cover driver manifests + connection profiles. Keep it one-for-one with
-the Quack / gizmosql-adbc batteries when adding features.
+the Quack / hardcharger-adbc batteries when adding features.
 
 ## Conventions
 

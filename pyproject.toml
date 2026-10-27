@@ -45,9 +45,19 @@ classifiers = [
 
 [project.optional-dependencies]
 dbapi = ["pandas"]
-test = ["pandas", "pytest >=7", "duckdb >=1.3", "shapely >=2.0"]
-# Oracle -> GizmoSQL streaming-ingest integration test (the customer-notebook flow).
-gizmosql = ["adbc-driver-gizmosql >=2.0"]
+# Latest floors; Python 3.10 gets each package's last release that supports it.
+test = [
+    "pandas >=3.1.0; python_version >= '3.11'",
+    "pandas >=2.3.3; python_version < '3.11'",
+    "pytest >=9.1.1",
+    "duckdb >=2.0.0; python_version >= '3.11'",
+    "duckdb >=1.5.6; python_version < '3.11'",
+    "shapely >=2.2.0; python_version >= '3.11'",
+    "shapely >=2.1.2; python_version < '3.11'",
+]
+# Oracle -> Hardcharger integration tests (https://gizmodata.com/hardcharger): the
+# server package and its ADBC client. The client needs Python 3.11 or later.
+hardcharger = ["hardcharger[adbc] >=2.1.0; python_version >= '3.11'"]
 
 [project.urls]
 homepage = "https://github.com/gizmodata/adbc-driver-oracle"
@@ -71,6 +81,6 @@ xfail_strict = true
 testpaths = ["python/tests"]
 markers = [
     "integration: requires a live Oracle Database (ADBC_ORACLE_TEST_URI; see python/tests/conftest.py)",
-    "gizmosql: additionally requires a live GizmoSQL (GIZMOSQL_URI / GIZMOSQL_TOKEN)",
-    "duckdb_ext: requires the duckdb package and the adbc_scanner community extension",
+    "hardcharger: additionally requires Hardcharger (ADBC_ORACLE_TEST_HARDCHARGER_URI, or the hardcharger package)",
+    "duckdb_ext: requires the adbc_scanner extension (in Hardcharger, or the duckdb package)",
 ]

@@ -1,4 +1,4 @@
-# adbc-driver-oracle
+# adbc-driver-oracle - by [GizmoData™](https://gizmodata.com)
 
 **An [Apache Arrow ADBC](https://arrow.apache.org/adbc/) driver for [Oracle Database](https://www.oracle.com/database/) — pure Go, no Oracle Client libraries required.**
 
@@ -12,6 +12,7 @@
 [![PyPI version](https://badge.fury.io/py/adbc-driver-oracle.svg)](https://badge.fury.io/py/adbc-driver-oracle)
 [![PyPI Downloads](https://img.shields.io/pepy/dt/adbc-driver-oracle.svg)](https://pypi.org/project/adbc-driver-oracle/)
 [![License](https://img.shields.io/github/license/gizmodata/adbc-driver-oracle)](LICENSE)
+[![Hardcharger](https://img.shields.io/badge/works%20with-Hardcharger%E2%84%A2-f15a24.svg)](https://gizmodata.com/hardcharger)
 
 Speaks Oracle's native TNS/TTC wire protocol directly from Go and returns
 Apache Arrow `RecordBatch`es straight from the result set — the way
@@ -126,37 +127,52 @@ with conn.cursor() as cur:
         process(batch)
 ```
 
-### Oracle → GizmoSQL (or any ADBC target), ADBC to ADBC
+### Oracle → Hardcharger (or any ADBC target), ADBC to ADBC
 
 The reader above can be handed straight to another driver's bulk ingest,
-so a table moves from Oracle into [GizmoSQL](https://gizmodata.com/gizmosql)
-without ever being materialised on the client — no pandas, no ODBC, no
-Oracle Client:
+so a table moves from Oracle into [Hardcharger™](https://gizmodata.com/hardcharger),
+GizmoData's DuckDB 2.0 server, without ever being materialised on the client —
+no pandas, no ODBC, no Oracle Client:
+
+```sh
+pip install adbc-driver-oracle adbc-driver-hardcharger
+```
 
 ```python
 import adbc_driver_oracle.dbapi as oracle
-import adbc_driver_gizmosql.dbapi as gizmosql
+from adbc_driver_hardcharger import dbapi as hardcharger
 
 with oracle.connect(uri=oracle_uri) as src, \
-     gizmosql.connect(gizmosql_uri, username="token", password=token) as dst:
+     hardcharger.connect(uri="hardcharger://hardcharger.example.com", username="app", password=password) as dst:
     with src.cursor() as s, dst.cursor() as d:
-        s.execute("SELECT * FROM sales.orders")
+        s.execute(operation="SELECT * FROM sales.orders")
         rows = d.adbc_ingest(table_name="orders", data=s.fetch_record_batch(), mode="replace")
         dst.commit()
         print(f"Loaded {rows:,} rows")
 ```
 
-(`python/tests/test_oracle_to_gizmosql.py` runs exactly this against a
-live Oracle + GizmoSQL pair in CI; GizmoSQL is a test-only dependency —
-the driver itself has no GizmoSQL code.)
+Hardcharger sends the ingest over several connections at once and commits it as one,
+so the rows land in no particular order. (`python/tests/test_oracle_to_hardcharger.py`
+runs exactly this against a live Oracle + [Hardcharger](https://gizmodata.com/hardcharger)
+pair in CI; Hardcharger is a test-only dependency — the driver itself has no Hardcharger code.)
 
-**Batch sizing.** Each Arrow record batch becomes one Flight SQL `DoPut`
-message on the GizmoSQL side, and the GizmoSQL driver's gRPC client caps
-messages at 16 MiB by default. The Oracle driver's batches are Flight-safe
-out of the box: a batch is capped at 65,536 rows (`batch_size`) **and**
-8 MiB (`batch_bytes`), so even very wide tables stream through without
-tripping the cap. Both knobs are tunable (URI parameter or
-`adbc.oracle.*` in `db_kwargs`):
+To try it without a server of your own, `pip install "hardcharger[adbc]"` runs a local
+[Hardcharger](https://gizmodata.com/hardcharger) from Python:
+
+```python
+import hardcharger
+
+with hardcharger.Server() as server, server.connect() as dst:
+    ...  # dst is a Hardcharger connection, as above
+```
+
+**Batch sizing.** Each Arrow record batch becomes one Arrow IPC message on the
+ingest side. [Hardcharger](https://gizmodata.com/hardcharger) accepts messages up to its
+`max_ingest_message_bytes` (64 MiB by default), and Flight SQL targets usually cap gRPC
+messages at 16 MiB. The Oracle driver's batches fit both out of the box: a batch is
+capped at 65,536 rows (`batch_size`) **and** 8 MiB (`batch_bytes`), so even very wide
+tables stream through. Both knobs are tunable (URI parameter or `adbc.oracle.*` in
+`db_kwargs`):
 
 ```python
 src = oracle.connect(uri=oracle_uri + "?batch_bytes=4194304")   # smaller batches
@@ -164,26 +180,27 @@ src = oracle.connect(uri=oracle_uri + "?batch_bytes=4194304")   # smaller batche
 src = oracle.connect(uri=oracle_uri, db_kwargs={"adbc.oracle.batch_bytes": str(4 * 1024 * 1024)})
 ```
 
-`batch_bytes=0` removes the byte cap (batches then bound only by
-`batch_size` rows — a pre-1.0 default that could exceed 16 MiB for rows
-wider than ~250 bytes and fail ingest with `ResourceExhausted: trying to
-send message larger than max`). To move *more* than 8 MiB per message,
-also raise the GizmoSQL client's gRPC cap with
-`adbc.flight.sql.client_option.with_max_msg_size` — see the
-[GizmoSQL driver README](https://github.com/gizmodata/gizmosql-adbc#tuning-bulk-ingest-batch-size).
+`batch_bytes=0` removes the byte cap (batches then bound only by `batch_size`
+rows, a pre-1.0 default). Rows wider than about 1 KiB can then make a batch larger
+than 64 MiB, which Hardcharger refuses with HTTP 413 `payload_too_large`; keep the cap,
+or raise the server's `max_ingest_message_bytes`.
 
-### DuckDB / GizmoSQL ↔ Oracle via `adbc_scanner`
+### Hardcharger / DuckDB ↔ Oracle via `adbc_scanner`
 
-Because the driver is a plain ADBC c-shared library, DuckDB — and
-therefore GizmoSQL, which embeds DuckDB — can talk to Oracle *live*
-through the [`adbc_scanner`](https://github.com/gizmodata/adbc_scanner)
-community extension, in both directions:
+Because the driver is a plain ADBC c-shared library,
+[Hardcharger](https://gizmodata.com/hardcharger) and DuckDB can talk to Oracle *live*
+through the [`adbc_scanner`](https://query.farm/products/extensions/adbc_scanner/)
+extension, in both directions. On DuckDB 2.0 and later (and so on every Hardcharger)
+it comes from the Query.Farm extension repository:
 
 ```sql
-INSTALL adbc_scanner FROM community;
-LOAD adbc_scanner;
+SET allow_extension_repositories = 'allowed';
+CREATE EXTENSION REPOSITORY IF NOT EXISTS query_farm WITH PREFIX 'https://duckdb-extensions.query.farm';
+INSTALL adbc_scanner FROM query_farm;
+LOAD adbc_scanner FROM query_farm;   -- in each session
+-- (DuckDB 1.x: INSTALL adbc_scanner FROM community; LOAD adbc_scanner;)
 
--- credentials once, in a DuckDB secret
+-- credentials once, in a secret
 CREATE SECRET ora_secret (
     TYPE adbc,
     SCOPE 'oracle://db.example.com:1521/PROD',
@@ -202,28 +219,32 @@ SELECT o.ORDER_ID, c.name FROM ora.SALES.ORDERS o JOIN customers c ON c.id = o.C
 -- push (the simple way): write straight into Oracle through the attached
 -- catalog with plain SQL — USE the Oracle schema, then CREATE TABLE ... AS
 USE ora.SALES;
-CREATE TABLE ORDERS_COPY AS SELECT * FROM memory.local_orders;   -- CTAS into Oracle
-USE memory;
+CREATE TABLE ORDERS_COPY AS SELECT * FROM memory.main.local_orders;   -- CTAS into Oracle
+USE memory;                           -- back to your own catalog
 
 -- the function API: arbitrary Oracle SQL and bulk inserts, on the attached database
 SELECT * FROM adbc_scan('ora', 'SELECT * FROM sales.orders WHERE ROWNUM <= 10');
 SELECT * FROM adbc_insert('ora', 'ORDERS_COPY2', (SELECT * FROM local_orders), mode := 'create');
 ```
 
+In Hardcharger the driver is loaded by the server, so `driver` names a library (or an
+installed manifest) on the server's machine. The `ghcr.io/gizmodata/hardcharger:latest-adbc`
+image ships this driver with its manifest, so `driver 'oracle'` works there as is.
+
 Both write paths work: `USE <attached schema>; CREATE TABLE ... AS ...` (and
 `INSERT INTO ...`) through the attached catalog, or the `adbc_insert()`
-function for arbitrary relations. `python/tests/test_adbc_scanner.py` covers
-reads and both write paths.
+function for arbitrary relations. `python/tests/test_adbc_scanner.py` runs
+reads and both write paths inside a Hardcharger server and in an embedded DuckDB.
 
-Credentials can live in a self-contained DuckDB secret (above) or in an ADBC
+Credentials can live in a self-contained secret (above) or in an ADBC
 connection profile — `adbc_scanner` resolves `profile://…` URIs too, so
 profiles are not specific to any one extension (the connection-profiles
 section below shows the profile setup).
 
 ### DuckDB via connection profiles (the `adbc` community extension)
 
-DuckDB's `adbc` community extension (`INSTALL adbc FROM community`; see the
-[GizmoSQL guide](https://docs.gizmosql.com/adbc_duckdb_extension/))
+DuckDB's [`adbc` community extension](https://duckdb.org/community_extensions/extensions/adbc)
+(`INSTALL adbc FROM community`)
 resolves databases through ADBC connection profiles — no credentials in
 your SQL — and additionally supports writes (`INSERT`, `COPY`,
 `CREATE TABLE AS`) into the attached database through ADBC bulk ingest:
@@ -671,7 +692,7 @@ adbc-driver-oracle/
 ├── driver/oracle/   — pure-Go ADBC Driver/Database/Connection/Statement impl
 ├── pkg/oracle/      — cgo c-shared wrapper (produces libadbc_driver_oracle.{so,dylib,dll})
 ├── python/          — Python wheel sources (adbc_driver_oracle)
-└── .github/         — CI: go test, python tests (Oracle Free + GizmoSQL services), wheel matrix, PyPI publish
+└── .github/         — CI: go test, python tests (Oracle Free + Hardcharger), wheel matrix, PyPI publish
 ```
 
 ## Provenance & licensing
@@ -712,3 +733,12 @@ this driver interoperates with and are nominative fair use.
 [MIT](https://github.com/gizmodata/adbc-driver-oracle/blob/main/LICENSE) —
 Copyright (c) 2026 GizmoData LLC. See [`NOTICE`](NOTICE) for third-party
 attributions.
+
+---
+
+<p align="center">
+  <a href="https://gizmodata.com"><img src="https://raw.githubusercontent.com/gizmodata/adbc-driver-oracle/main/docs/assets/gizmodata-logo.png" alt="GizmoData™" width="56"></a><br>
+  <sub>Built by <a href="https://gizmodata.com">GizmoData™</a>, makers of <a href="https://gizmodata.com/hardcharger">Hardcharger™</a>. Free and open source.</sub>
+</p>
+
+<p align="center"><sub>Hardcharger™ and GizmoData™ are trademarks of GizmoData LLC.</sub></p>

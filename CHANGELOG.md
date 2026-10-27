@@ -6,6 +6,28 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-10-27
+
+### Changed
+
+- The README's cross-tool examples and the cross-tool tests use
+  [Hardcharger](https://gizmodata.com/hardcharger) (GizmoData's DuckDB 2.0 server) instead of
+  GizmoSQL: Oracle → Hardcharger streaming ingest, and `adbc_scanner` reads and writes run both
+  inside a Hardcharger server and in an embedded DuckDB. Test settings are now
+  `ADBC_ORACLE_TEST_HARDCHARGER_*`; without them the tests start a server from the `hardcharger`
+  PyPI package (`pip install -e ".[test,hardcharger]"`). The driver itself is unchanged.
+- README: `adbc_scanner` for DuckDB 2.0 and later (and so Hardcharger) installs from the Query.Farm
+  extension repository; the community build refuses to load inside Hardcharger. Batch sizing is
+  described against Hardcharger's 64 MiB ingest message limit.
+- Dependencies: arrow-adbc Go 1.13.0 (was 1.11.0), arrow-go 18.8.0 (was 18.7.0) and their
+  dependencies; the Go module now needs Go 1.26 (arrow-adbc 1.13 does). CI builds with Go 1.27.3.
+  arrow-go 18.8 refuses a `Z` suffix on a time-zone-less timestamp in `array.FromJSON`; one test
+  fixture changed (the driver doesn't parse timestamps from JSON).
+  Test extras: pytest 9.1, DuckDB 2.0, pandas 3.1 and shapely 2.2 (Python 3.10 keeps their last
+  releases for it). The runtime floors (`adbc-driver-manager`, `pyarrow`) are unchanged, so the
+  wheel still installs next to older versions.
+- CI cancels a superseded run on the same branch (never a tag run).
+
 ## [1.0.1] - 2026-10-15
 
 ### Fixed

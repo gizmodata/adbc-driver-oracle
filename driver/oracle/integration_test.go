@@ -129,9 +129,9 @@ func TestIngestRoundTrip(t *testing.T) {
 		{Name: "b", Type: arrow.FixedWidthTypes.Boolean, Nullable: true},
 	}, nil)
 	rec, _, err := array.RecordFromJSON(memory.DefaultAllocator, schema, strings.NewReader(`[
-		{"id": 1, "name": "one", "amt": "12.34", "f": 1.5, "ts": "2024-01-02T03:04:05.123456Z", "b": true},
+		{"id": 1, "name": "one", "amt": "12.34", "f": 1.5, "ts": "2024-01-02T03:04:05.123456", "b": true},
 		{"id": 2, "name": null, "amt": null, "f": null, "ts": null, "b": false},
-		{"id": 3, "name": "three", "amt": "-0.01", "f": -2.25, "ts": "1999-12-31T23:59:59Z", "b": null}
+		{"id": 3, "name": "three", "amt": "-0.01", "f": -2.25, "ts": "1999-12-31T23:59:59", "b": null}
 	]`))
 	require.NoError(t, err)
 	defer rec.Release()

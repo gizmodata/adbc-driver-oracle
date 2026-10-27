@@ -21,6 +21,10 @@ on:
 # - publish (PyPI) and github-release run only on tag push, gated on
 #   all wheels building successfully
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
 jobs:
   go-test:
     name: Go tests
@@ -55,7 +59,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.26.9'
+          go-version: '1.27.3'
           cache: false
 
       - name: go vet
@@ -95,30 +99,17 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 30
-      gizmosql:
-        # Linux-only, like the Oracle service. Used by the Oracle -> GizmoSQL
-        # ADBC-to-ADBC streaming test; everything else ignores it.
-        image: ${{ startsWith(matrix.os, 'ubuntu') && 'gizmodata/gizmosql:latest' || '' }}
-        env:
-          TLS_ENABLED: '0'
-          GIZMOSQL_PASSWORD: gizmosql_password
-        ports:
-          - 31337:31337
     env:
       ADBC_ORACLE_TEST_URI: ${{ startsWith(matrix.os, 'ubuntu') && 'oracle://scott:tiger@localhost:1521/FREEPDB1' || '' }}
       # The full (non-slim) image includes Oracle Spatial, needed for the
       # SDO_GEOMETRY -> GeoArrow tests.
       ADBC_ORACLE_SPATIAL_URI: ${{ startsWith(matrix.os, 'ubuntu') && 'oracle://scott:tiger@localhost:1521/FREEPDB1' || '' }}
-      # Oracle -> GizmoSQL streaming-ingest test (test-only dependency; the
-      # driver itself has no GizmoSQL code).
-      GIZMOSQL_URI: ${{ startsWith(matrix.os, 'ubuntu') && 'gizmosql://localhost:31337?transport=tcp' || '' }}
-      GIZMOSQL_PASSWORD: gizmosql_password
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.26.9'
+          go-version: '1.27.3'
           cache: false
 
       - uses: actions/setup-python@v7
@@ -160,10 +151,31 @@ jobs:
           fi
           echo "ADBC_ORACLE_LIBRARY=${LIB_PATH}" >> "$GITHUB_ENV"
 
+      - name: Start Hardcharger
+        # The Oracle -> Hardcharger tests (test-only dependency; the driver itself
+        # has no Hardcharger code). Linux only, like the Oracle service, and not on
+        # Python 3.10, which the Hardcharger client doesn't support. Started after
+        # the build so the server can load this commit's driver library for the
+        # adbc_scanner tests; host networking lets it reach the Oracle service.
+        if: startsWith(matrix.os, 'ubuntu') && matrix.python != '3.10'
+        run: |
+          for i in 1 2 3 4 5; do docker pull -q "$HARDCHARGER_IMAGE" && break; [ $i = 5 ] && exit 1; sleep $((i * 15)); done
+          docker run -d --name hardcharger --network host \
+            -v "$PWD/pkg/oracle:/drivers:ro" \
+            -e HARDCHARGER_ADMIN_USERNAME=hardcharger -e HARDCHARGER_ADMIN_PASSWORD=hardcharger \
+            "$HARDCHARGER_IMAGE"
+          docker run --rm "$HARDCHARGER_IMAGE" --version
+          {
+            echo "ADBC_ORACLE_TEST_HARDCHARGER_URI=hardcharger://127.0.0.1:31337?tls=false"
+            echo "ADBC_ORACLE_TEST_HARDCHARGER_DRIVER_PATH=/drivers/libadbc_driver_oracle.so"
+          } >> "$GITHUB_ENV"
+        env:
+          HARDCHARGER_IMAGE: ghcr.io/gizmodata/hardcharger:latest
+
       - name: Install Python wheel from source tree
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[test,gizmosql]"
+          python -m pip install -e ".[test,hardcharger]"
 
       - name: Run Python tests
         # No -m filter: run the unit tests (manifest writer etc.) plus
@@ -268,7 +280,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.26.9'
+          go-version: '1.27.3'
           cache: false
 
       - uses: actions/setup-python@v7
@@ -374,7 +386,7 @@ jobs:
           cd "$TESTS"
           "$VPY" -m pytest -v \
             --override-ini='markers=integration: integration tests
-              gizmosql: needs GizmoSQL
+              hardcharger: needs Hardcharger
               duckdb_ext: needs duckdb + adbc_scanner' tests
 
       - name: Upload wheel artifact
