@@ -4,7 +4,7 @@ and embedded DuckDB reading from and writing to Oracle *live* through the
 
     Hardcharger / duckdb ──adbc_scanner──▶ libadbc_driver_oracle ──TNS/TTC──▶ Oracle
 
-Every test runs twice: inside a Hardcharger server (the SQL goes over Warp SQL
+Every test runs twice: inside a Hardcharger server (the SQL goes over Chargewire
 and the server loads the driver) and in an in-process DuckDB. Both directions
 are exercised: ``adbc_scan`` pulls Oracle result sets in, and writes go back to
 Oracle two ways — ``CREATE TABLE ... AS`` through the attached catalog
