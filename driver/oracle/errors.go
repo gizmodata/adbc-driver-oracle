@@ -24,6 +24,9 @@ func fromTTCError(err error) error {
 	if oe, ok := ttc.AsError(err); ok {
 		return adbc.Error{Code: statusForORA(oe.Code), Msg: oe.Error(), VendorCode: int32(oe.Code)}
 	}
+	if errors.Is(err, ttc.Err10gVerifierNotAllowed) {
+		return adbc.Error{Code: adbc.StatusUnauthenticated, Msg: err.Error()}
+	}
 	if errors.Is(err, tns.ErrConnectionClosed) {
 		return adbc.Error{Code: adbc.StatusIO, Msg: err.Error()}
 	}

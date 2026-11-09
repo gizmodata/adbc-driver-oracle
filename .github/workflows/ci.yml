@@ -14,7 +14,8 @@ on:
 #   └─ validation ┘            ╲
 #                                └─> github-release
 #
-# - go-test runs `go vet` + `go test -race ./...` on linux + macOS
+# - go-test runs `go vet` + `go test -race ./...` on linux + macOS (on linux also
+#   the 10g/11g/12c password-verifier tests against an Oracle 21c service)
 # - test runs the Python unit + integration suite (6 Pythons × 3 OS)
 # - validation runs the adbc-drivers.org driver validation suite against
 #   Oracle 23ai (validation/README.md); it fails, never skips, without a server
@@ -51,11 +52,31 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 30
+      oracle_xe21:
+        # Oracle 21c for the password-verifier tests (driver/oracle/verifier_live_test.go):
+        # 23ai and later can no longer hold an account with only a 10g verifier.
+        image: ${{ startsWith(matrix.os, 'ubuntu') && 'gvenzl/oracle-xe:21-slim-faststart' || '' }}
+        env:
+          ORACLE_PASSWORD: tiger
+        ports:
+          - 1522:1521
+        options: >-
+          --health-cmd healthcheck.sh
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 30
     env:
       ADBC_ORACLE_TEST_URI: ${{ startsWith(matrix.os, 'ubuntu') && 'oracle://scott:tiger@localhost:1521/FREEPDB1' || '' }}
       # The full (non-slim) image includes Oracle Spatial, needed for the
       # SDO_GEOMETRY -> GeoArrow tests.
       ADBC_ORACLE_SPATIAL_URI: ${{ startsWith(matrix.os, 'ubuntu') && 'oracle://scott:tiger@localhost:1521/FREEPDB1' || '' }}
+      # Accounts with only a 10g / 11g / 12c password verifier, made by
+      # scripts/setup_verifier_users.sh below. With VERIFIERS_REQUIRED the tests
+      # fail, never skip, when a URI is missing.
+      ADBC_ORACLE_TEST_10G_URI: ${{ startsWith(matrix.os, 'ubuntu') && 'oracle://adbc_test_10g:Tiger10g@127.0.0.1:1522/XEPDB1' || '' }}
+      ADBC_ORACLE_TEST_11G_URI: ${{ startsWith(matrix.os, 'ubuntu') && 'oracle://adbc_test_11g:Tiger11g@127.0.0.1:1522/XEPDB1' || '' }}
+      ADBC_ORACLE_TEST_12C_URI: ${{ startsWith(matrix.os, 'ubuntu') && 'oracle://adbc_test_12c:Tiger12c@127.0.0.1:1522/XEPDB1' || '' }}
+      ADBC_ORACLE_TEST_VERIFIERS_REQUIRED: ${{ startsWith(matrix.os, 'ubuntu') && 'true' || '' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -63,6 +84,10 @@ jobs:
         with:
           go-version: '1.27.3'
           cache: false
+
+      - name: Create the single-verifier accounts (Linux)
+        if: startsWith(matrix.os, 'ubuntu')
+        run: scripts/setup_verifier_users.sh "${{ job.services.oracle_xe21.id }}" XEPDB1
 
       - name: go vet
         run: go vet ./...

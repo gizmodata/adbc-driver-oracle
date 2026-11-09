@@ -185,6 +185,34 @@ without a listener on localhost:1521.
 - Unknown-precision NUMBER (expressions, `COUNT(*)`) maps to `float64`
   in `number_mode=auto`; `decimal`/`string` modes are exact.
 
+## Password verifiers
+
+`internal/ttc/auth.go` handles 12c (0x4815, PBKDF2/SHA-512), 11g (0xb152 /
+0x1b25, SHA-1) and, only with `adbc.oracle.allow_10g_verifier=true`, 10g
+(0x939, O3LOGON: DES hash of upper(user||password) in UTF-16BE, ported from
+go-ora, see NOTICE). Without the option a 0x939 challenge fails in
+`authMessage.write` before any key material is derived (`Err10gVerifierNotAllowed`,
+mapped to UNAUTHENTICATED): a MITM on plain TCP could otherwise downgrade a 12c
+account's login to a cheaply crackable 10g exchange. 21c servers send
+AUTH_PBKDF2_CSK_SALT for 10g too (PBKDF2 combo key); pre-12c servers would use
+the MD5 path (unit-tested only).
+
+23ai/26ai refuse 10g verifiers (`IDENTIFIED BY VALUES '<16 hex>'` → ORA-02153),
+so the live tests use `gvenzl/oracle-xe:21-slim-faststart` (amd64; runs under
+emulation on Apple Silicon given enough Docker memory):
+
+```bash
+docker run --name oracle-verifiers -d -p 1522:1521 -e ORACLE_PASSWORD=tiger gvenzl/oracle-xe:21-slim-faststart
+scripts/setup_verifier_users.sh oracle-verifiers   # ADBC_TEST_10G/_11G/_12C, one verifier each
+ADBC_ORACLE_TEST_10G_URI=oracle://adbc_test_10g:Tiger10g@127.0.0.1:1522/XEPDB1 \
+ADBC_ORACLE_TEST_11G_URI=oracle://adbc_test_11g:Tiger11g@127.0.0.1:1522/XEPDB1 \
+ADBC_ORACLE_TEST_12C_URI=oracle://adbc_test_12c:Tiger12c@127.0.0.1:1522/XEPDB1 \
+  go test -run 'TestLive1' ./driver/oracle/
+```
+
+They skip without those URIs unless `ADBC_ORACLE_TEST_VERIFIERS_REQUIRED=true`
+(CI's Linux go-test leg, which runs a second service container, `oracle_xe21`).
+
 ## Test battery
 
 `python/tests/test_smoke.py` mirrors the README (quickstart, streaming,

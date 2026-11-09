@@ -46,6 +46,12 @@ type Config struct {
 	CurrentSchema    string
 	ExtraConnectData map[string]string
 
+	// Allow10gVerifier lets an account whose only password verifier is the
+	// 10g (O3LOGON, DES-based) one log in. Off by default: the 10g hash is
+	// weak, and an active man-in-the-middle on a non-TLS connection could
+	// offer it for any account to get an offline-crackable hash.
+	Allow10gVerifier bool
+
 	// DisableOOB turns off out-of-band break support (statement
 	// cancellation then falls back to in-band markers).
 	DisableOOB bool
@@ -530,6 +536,7 @@ func (c *Conn) authenticate(ctx context.Context) error {
 		pid:            strconv.Itoa(os.Getpid()),
 		driverName:     cfg.DriverName,
 		fullVersionNum: cfg.FullVersion,
+		allow10g:       cfg.Allow10gVerifier,
 		alterSession:   fmt.Sprintf("ALTER SESSION SET TIME_ZONE='%s'\x00", strings.ReplaceAll(cfg.SessionTimeZone, "'", "''")),
 	}
 	auth.initialize(c)

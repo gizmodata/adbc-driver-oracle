@@ -455,6 +455,29 @@ supported — use password, TLS or token auth. Over a `tcps` (TLS)
 connection NNE stays off by default since the channel is already
 encrypted.
 
+### Password verifiers (12c, 11g, legacy 10g)
+
+Accounts with 12c (PBKDF2/SHA-512) and 11g (SHA-1) password verifiers log in
+as usual. Accounts whose **only** verifier is the pre-11g, DES-based 10g one
+(passwords last set before 11g, or kept for old clients) are refused unless you
+opt in:
+
+```python
+oracle.connect(uri=uri, db_kwargs={"adbc.oracle.allow_10g_verifier": "true"})
+# or on the URI: oracle://user:pass@host:1521/SERVICE?allow_10g_verifier=true
+```
+
+The option is off by default because the 10g hash is weak (DES,
+case-insensitive, salted only by the user name), and a man-in-the-middle on a
+connection without TLS could answer any login with a 10g challenge to get an
+offline-crackable hash of the password. Without the option, such a challenge
+fails before anything derived from the password is sent. Prefer TLS when you
+enable it, and plan to reset those passwords on a current server (which gives
+the accounts 12c verifiers). The server must also allow these logins: with
+`SQLNET.ALLOWED_LOGON_VERSION_SERVER` at 12 or higher in its `sqlnet.ora` (the
+default since 12.2), it answers ORA-01017 for a 10g-only account whatever the
+client does; 11 or lower lets it log in.
+
 ### Cancellation
 
 `cursor.adbc_cancel()` (or a cancelled/expired `context.Context` in Go)
@@ -502,6 +525,7 @@ descriptors are accepted in place of the `oracle://` form.
 | `adbc.oracle.tls.server_name`   | (host)    | Host name for certificate verification / SNI.                         |
 | `adbc.oracle.wallet_location`   | (none)    | Directory containing `ewallet.pem` (Autonomous Database wallet); implies TLS. mTLS works with an unencrypted key. |
 | `adbc.oracle.token`             | (none)    | OAuth / IAM bearer token instead of a password (TLS only).            |
+| `adbc.oracle.allow_10g_verifier` | `false`  | `true` → let accounts that have only a 10g (DES-based) password verifier log in; see [Password verifiers](#password-verifiers-12c-11g-legacy-10g). |
 | `adbc.oracle.mode`              | (none)    | `sysdba`, `sysoper`, `sysasm`, `sysbackup`, `sysdg`, `syskm`, `sysrac`. |
 | `adbc.oracle.connect_timeout`   | `30`      | Dial timeout, as seconds or a Go duration like `1.5s`.                |
 | `adbc.oracle.batch_size`        | `65536`   | Maximum rows per Arrow record batch.                                  |

@@ -83,6 +83,12 @@ class DatabaseOptions(enum.Enum):
     #: Set to "true" to disable out-of-band (TCP urgent) cancellation breaks.
     DISABLE_OOB = "adbc.oracle.disable_oob"
 
+    #: Set to "true" to let accounts that have only a 10g (O3LOGON, DES-based)
+    #: password verifier log in. Off by default: the 10g hash is weak, and a
+    #: man-in-the-middle on a non-TLS connection could request it to get an
+    #: offline-crackable hash of the password.
+    ALLOW_10G_VERIFIER = "adbc.oracle.allow_10g_verifier"
+
     #: Native Network Encryption / data integrity level: "accepted"
     #: (default), "requested", "required" or "rejected".
     NNE = "adbc.oracle.nne"

@@ -3,15 +3,19 @@ package ttc
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/des"
 	"crypto/md5"
 	"crypto/pbkdf2"
 	"crypto/rand"
 	"crypto/sha1"
 	"crypto/sha512"
+	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf16"
 
 	"github.com/gizmodata/adbc-driver-oracle/internal/tns"
 )
@@ -33,10 +37,21 @@ const (
 
 // Verifier types.
 const (
+	verifierType10g  = 0x0939
 	verifierType11g1 = 0xb152
 	verifierType11g2 = 0x1b25
 	verifierType12c  = 0x4815
 )
+
+// Err10gVerifierNotAllowed is returned when the server offers only a 10g
+// (O3LOGON, DES-based) password verifier for the account and the caller has
+// not opted in with Config.Allow10gVerifier. Nothing derived from the
+// password has been sent when it is returned.
+var Err10gVerifierNotAllowed = errors.New("oracle: the server offered only a 10g (DES-based) password verifier " +
+	"for this account, which is refused by default; set adbc.oracle.allow_10g_verifier=true to allow it. " +
+	"The 10g hash is weak (DES, case-insensitive, salted only by the user name), and a man-in-the-middle " +
+	"on a connection without TLS could request it to get an offline-crackable hash of the password. " +
+	"Resetting the account's password on a current server gives it a 12c verifier instead")
 
 // authMessage performs the two-phase O5LOGON authentication.
 type authMessage struct {
@@ -54,6 +69,7 @@ type authMessage struct {
 	connectString  string
 	alterSession   string
 	fullVersionNum uint32
+	allow10g       bool
 
 	sessionData     map[string]string
 	verifierType    uint32
@@ -95,18 +111,25 @@ func (m *authMessage) processReturnParameters(r *tns.ReadBuffer) error {
 	if m.functionCode == funcAuthPhaseOne {
 		m.functionCode = funcAuthPhaseTwo
 	} else if m.comboKey != nil {
-		encoded, ok := m.sessionData["AUTH_SVR_RESPONSE"]
-		if !ok {
-			return fmt.Errorf("oracle: server did not return an authentication response")
-		}
-		raw, err := hex.DecodeString(encoded)
-		if err != nil {
-			return fmt.Errorf("oracle: invalid server authentication response: %w", err)
-		}
-		resp, err := decryptCBC(m.comboKey, raw)
-		if err != nil || len(resp) < 32 || string(resp[16:32]) != "SERVER_TO_CLIENT" {
-			return fmt.Errorf("oracle: invalid server authentication response (server key mismatch)")
-		}
+		return m.verifyServerResponse()
+	}
+	return nil
+}
+
+// verifyServerResponse checks AUTH_SVR_RESPONSE, which proves the server knows
+// the password verifier: it must decrypt under the combined session key.
+func (m *authMessage) verifyServerResponse() error {
+	encoded, ok := m.sessionData["AUTH_SVR_RESPONSE"]
+	if !ok {
+		return fmt.Errorf("oracle: server did not return an authentication response")
+	}
+	raw, err := hex.DecodeString(encoded)
+	if err != nil {
+		return fmt.Errorf("oracle: invalid server authentication response: %w", err)
+	}
+	resp, err := decryptCBC(m.comboKey, raw)
+	if err != nil || len(resp) < 32 || string(resp[16:32]) != "SERVER_TO_CLIENT" {
+		return fmt.Errorf("oracle: invalid server authentication response (server key mismatch)")
 	}
 	return nil
 }
@@ -137,6 +160,11 @@ func (m *authMessage) write(w *tns.WriteBuffer) {
 			case verifierType12c:
 				numPairs++
 			case verifierType11g1, verifierType11g2:
+			case verifierType10g:
+				if !m.allow10g {
+					m.conn.deferredErr = Err10gVerifierNotAllowed
+					return
+				}
 			default:
 				m.conn.deferredErr = fmt.Errorf("oracle: unsupported password verifier type %#x", m.verifierType)
 				return
@@ -194,7 +222,8 @@ func (m *authMessage) generateVerifier() error {
 	}
 	var keyLen int
 	var passwordHash, passwordKey []byte
-	if m.verifierType == verifierType12c {
+	switch m.verifierType {
+	case verifierType12c:
 		keyLen = 32
 		iterations, _ := strconv.Atoi(m.sessionData["AUTH_PBKDF2_VGEN_COUNT"])
 		salt := append(append([]byte{}, verifierData...), []byte("AUTH_PBKDF2_SPEEDY_KEY")...)
@@ -206,7 +235,11 @@ func (m *authMessage) generateVerifier() error {
 		h.Write(passwordKey)
 		h.Write(verifierData)
 		passwordHash = h.Sum(nil)[:32]
-	} else {
+	case verifierType10g:
+		// O3LOGON: the stored 10g hash, zero-extended to an AES-128 key.
+		keyLen = 16
+		passwordHash = append(oracle10gHash(m.username, string(m.password)), make([]byte, 8)...)
+	default:
 		keyLen = 24
 		h := sha1.New()
 		h.Write(m.password)
@@ -230,7 +263,13 @@ func (m *authMessage) generateVerifier() error {
 		return err
 	}
 	var comboKey []byte
-	if len(partA) == 48 {
+	if m.verifierType == verifierType10g {
+		m.sessionKey = strings.ToUpper(hex.EncodeToString(encodedClientKey))[:2*len(partB)]
+		comboKey, err = o3logonComboKey(partA, partB, m.sessionData)
+		if err != nil {
+			return err
+		}
+	} else if len(partA) == 48 {
 		m.sessionKey = strings.ToUpper(hex.EncodeToString(encodedClientKey))[:96]
 		b := make([]byte, 24)
 		for i := 16; i < 40; i++ {
@@ -274,6 +313,65 @@ func (m *authMessage) generateVerifier() error {
 	}
 	m.encodedPassword = strings.ToUpper(hex.EncodeToString(encPassword))
 	return nil
+}
+
+// oracle10gHash returns the 8-byte 10g password verifier of username and
+// password, the value SYS.USER$.PASSWORD holds (for example SCOTT/TIGER gives
+// F894844C34402B67): the user name and password are concatenated, upper-cased
+// and encoded as UTF-16BE, zero-padded to the DES block size, and
+// DES-CBC-encrypted (zero IV) under the fixed key 0123456789ABCDEF; the last
+// cipher block is then the key for a second DES-CBC pass over the same input,
+// whose last block is the hash.
+//
+// Ported from sijms/go-ora (MIT License, see NOTICE), getKeyFromUserNameAndPassword
+// in v2/auth_object.go, with UTF-16BE encoding of non-ASCII characters (go-ora
+// keeps only the low byte of each UTF-8 byte; for ASCII both agree).
+func oracle10gHash(username, password string) []byte {
+	units := utf16.Encode([]rune(strings.ToUpper(username + password)))
+	n := len(units) * 2
+	if n%des.BlockSize != 0 {
+		n += des.BlockSize - n%des.BlockSize
+	}
+	buf := make([]byte, n)
+	for i, u := range units {
+		binary.BigEndian.PutUint16(buf[2*i:], u)
+	}
+	desCBCMAC := func(key []byte) []byte {
+		block, _ := des.NewCipher(key) // DES keys are always 8 bytes here
+		out := make([]byte, n)
+		cipher.NewCBCEncrypter(block, make([]byte, des.BlockSize)).CryptBlocks(out, buf)
+		return out[n-des.BlockSize:]
+	}
+	return desCBCMAC(desCBCMAC([]byte{0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef}))
+}
+
+// o3logonComboKey derives the 16-byte AES key that encrypts the password from
+// the decrypted server session key (serverKey) and the client's own session
+// key (clientKey), both 32 bytes. Servers that send AUTH_PBKDF2_CSK_SALT (12c
+// and later) use PBKDF2-HMAC-SHA512 over the hex text of the first halves of
+// the client and server keys; older servers use MD5 of the XOR of bytes 16-31.
+//
+// Ported from sijms/go-ora (MIT License, see NOTICE), generatePasswordEncKey in
+// v2/auth_object.go (verifier type 2361).
+func o3logonComboKey(serverKey, clientKey []byte, sessionData map[string]string) ([]byte, error) {
+	if len(serverKey) != 32 || len(clientKey) != 32 {
+		return nil, fmt.Errorf("oracle: unexpected 10g session key length %d", len(serverKey))
+	}
+	if saltHex, ok := sessionData["AUTH_PBKDF2_CSK_SALT"]; ok {
+		salt, err := hex.DecodeString(saltHex)
+		if err != nil {
+			return nil, fmt.Errorf("oracle: invalid AUTH_PBKDF2_CSK_SALT: %w", err)
+		}
+		iterations, _ := strconv.Atoi(sessionData["AUTH_PBKDF2_SDER_COUNT"])
+		temp := append(append([]byte{}, clientKey[:16]...), serverKey[:16]...)
+		return pbkdf2.Key(sha512.New, strings.ToUpper(hex.EncodeToString(temp)), salt, iterations, 16)
+	}
+	x := make([]byte, 16)
+	for i := range x {
+		x[i] = serverKey[16+i] ^ clientKey[16+i]
+	}
+	sum := md5.Sum(x)
+	return sum[:], nil
 }
 
 // serverVersion returns the 5-tuple server version from AUTH_VERSION_NO.
