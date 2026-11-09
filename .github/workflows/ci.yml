@@ -373,9 +373,11 @@ jobs:
           # Keep cgo's default flags and append per-platform extras
           # (setting CGO_CFLAGS at all replaces the "-O2 -g" default).
           CGO_CFLAGS: -O2 -g ${{ matrix.extra_cflags }}
-          # Let the macOS wheel install on macOS 12+ rather than only on
-          # the runner's own release (it was tagged macosx_26_0).
-          MACOSX_DEPLOYMENT_TARGET: '12.0'
+          # Tag the macOS library and wheel for macOS 13+, the oldest macOS
+          # the Go 1.27 runtime supports (go.dev/doc/go1.27), rather than only
+          # the runner's own release (it was tagged macosx_26_0). Keep this in
+          # step with the Go toolchain: 12.0 let pip install it where Go can't run.
+          MACOSX_DEPLOYMENT_TARGET: '13.0'
 
         run: |
           if [ "${{ matrix.goos }}" = "linux" ]; then
@@ -399,11 +401,28 @@ jobs:
         if: ${{ !matrix.dll_only }}
         shell: bash
         env:
-          MACOSX_DEPLOYMENT_TARGET: '12.0'
+          MACOSX_DEPLOYMENT_TARGET: '13.0'
         run: |
           python -m pip install --upgrade pip build
           python -m build --wheel
           ls -la dist/
+
+      - name: Check the macOS wheel tag against the library
+        # pip trusts the tag: it must name the library's real minimum macOS and
+        # architecture (an arm64-only library once shipped as universal2).
+        if: ${{ matrix.goos == 'darwin' }}
+        run: |
+          set -euo pipefail
+          WHEEL=$(basename dist/*.whl)
+          LIB=pkg/oracle/libadbc_driver_oracle.dylib
+          MINOS=$(otool -l "$LIB" | awk '/LC_BUILD_VERSION/{f=1} f && $1=="minos"{print $2; exit}')
+          ARCHS=$(lipo -archs "$LIB")
+          echo "wheel: $WHEEL  library: minos $MINOS, archs $ARCHS"
+          WANT="macosx_${MINOS//./_}_${ARCHS}"
+          case "$WHEEL" in
+            *"-${WANT}.whl") ;;
+            *) echo "::error::$WHEEL should be tagged $WANT"; exit 1 ;;
+          esac
 
       - name: Smoke-test wheel in a clean venv
         if: ${{ !matrix.dll_only }}
