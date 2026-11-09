@@ -8,7 +8,6 @@ import (
 	"math"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/apache/arrow-adbc/go/adbc"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -289,7 +288,7 @@ func (w *jsonWriter) scalar(m *ttc.AttrMeta, raw []byte) error {
 		if err != nil {
 			return err
 		}
-		t := time.Unix(0, d.UnixNanos()).UTC()
+		t := d.Time()
 		w.out = append(w.out, '"')
 		if len(raw) == 7 {
 			w.out = t.AppendFormat(w.out, "2006-01-02T15:04:05")

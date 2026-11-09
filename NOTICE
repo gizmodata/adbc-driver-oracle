@@ -45,6 +45,19 @@ disassembly of any Oracle Corporation binary was used in creating this
 software.
 
 ------------------------------------------------------------------------------
+Validation test harness (not distributed)
+------------------------------------------------------------------------------
+
+The test harness under validation/ runs the ADBC driver validation suite
+(adbc-drivers/validation, https://github.com/adbc-drivers/validation), a
+test-only dependency that is not distributed with this software. Its test
+modules, quirks, pytest configuration and the Oracle query overrides under
+validation/queries/ were adapted from that suite and from its use in
+adbc-drivers/mysql (https://github.com/adbc-drivers/mysql), both
+Copyright (c) 2025-2026 ADBC Drivers Contributors and published under the
+Apache License, Version 2.0; those files keep their Apache-2.0 headers.
+
+------------------------------------------------------------------------------
 Trademarks
 ------------------------------------------------------------------------------
 

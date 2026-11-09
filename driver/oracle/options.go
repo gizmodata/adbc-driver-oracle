@@ -196,6 +196,35 @@ var easyConnectRe = regexp.MustCompile(`^(?:(tcps?)://)?([^:/]+)(?::(\d+))?/([^?
 
 // parseOptions merges the URI and explicit ADBC options into a config.
 // Explicit options override URI components.
+// databaseOptions are the keys AdbcDatabaseSetOption accepts (see parseOptions).
+var databaseOptions = map[string]struct{}{
+	OptionURI: {}, OptionUsername: {}, OptionPassword: {}, OptionHost: {}, OptionPort: {},
+	OptionServiceName: {}, OptionSID: {}, OptionTLS: {}, OptionTLSCACert: {}, OptionTLSSkipVerify: {},
+	OptionTLSServerName: {}, OptionWalletLocation: {}, OptionWalletPassword: {}, OptionCurrentSchema: {},
+	OptionConnectTimeout: {}, OptionApplicationName: {}, OptionBatchSize: {}, OptionPrefetchRows: {},
+	OptionTrace: {}, OptionMode: {}, OptionSessionTimeZone: {}, OptionNumberMode: {}, OptionIntervalMode: {},
+	OptionDateMode: {}, OptionBatchBytes: {}, OptionDisableOOB: {}, OptionUseExtensionTypes: {}, OptionNNE: {},
+	OptionNNEChecksum: {}, OptionNNEEncryptionAlgorithms: {}, OptionNNEChecksumAlgorithms: {}, OptionSDU: {},
+	OptionToken: {},
+}
+
+// checkDatabaseOption returns ADBC's NOT_IMPLEMENTED for a key the database
+// doesn't know, so a misspelt option fails instead of being dropped. Standard
+// ADBC keys of the other levels (adbc.connection.*, adbc.statement.*,
+// adbc.ingest.*) are still accepted and ignored: generic tooling sets e.g.
+// adbc.connection.autocommit at the database level.
+func checkDatabaseOption(key string) error {
+	if _, ok := databaseOptions[key]; ok {
+		return nil
+	}
+	for _, prefix := range []string{"adbc.connection.", "adbc.statement.", "adbc.ingest."} {
+		if strings.HasPrefix(key, prefix) {
+			return nil
+		}
+	}
+	return errStatus(adbc.StatusNotImplemented, "unknown database option %q", key)
+}
+
 func parseOptions(opts map[string]string) (*connConfig, error) {
 	// batchBytes defaults to 8 MiB so a single batch stays under common
 	// transport limits (e.g. Flight SQL's 16 MiB gRPC message cap) even
@@ -524,9 +553,8 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 		case OptionToken:
 			cfg.ttc.Token = v
 		default:
-			// Unknown options are ignored so generic tooling that sets
-			// e.g. adbc.connection.autocommit at the database level
-			// doesn't fail.
+			// Other keys were checked by checkDatabaseOption: standard
+			// ADBC keys of other levels, ignored here.
 		}
 	}
 

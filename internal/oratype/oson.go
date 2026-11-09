@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math"
 	"strconv"
-	"time"
 	"unicode/utf8"
 )
 
@@ -409,7 +408,7 @@ func (d *osonDecoder) appendDate(b []byte) error {
 	if err != nil {
 		return err
 	}
-	t := time.Unix(0, dt.UnixNanos()).UTC()
+	t := dt.Time()
 	d.out = append(d.out, '"')
 	if len(b) == 7 {
 		d.out = t.AppendFormat(d.out, "2006-01-02T15:04:05")

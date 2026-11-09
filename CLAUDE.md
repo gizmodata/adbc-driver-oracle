@@ -193,6 +193,25 @@ constraints), connection options; `test_profiles.py` / `test_manifest.py`
 cover driver manifests + connection profiles. Keep it one-for-one with
 the Quack / hardcharger-adbc batteries when adding features.
 
+## Conformance: `validation/`
+
+The [adbc-drivers.org validation suite](https://github.com/adbc-drivers/validation) runs
+against the c-shared library (`validation/README.md` has the commands; CI job
+`validation`, which gates wheels/PyPI/release). It is a **pinned test-only dependency**
+(`validation/requirements.txt`, git commit): don't add the adbc-drivers pixi /
+adbc-gen-workflow tooling, and don't register or open anything with that org.
+
+- `tests/oracle.py` — `DriverQuirks`: features, `quote_one_identifier` (mirrors the
+  driver's `identFor`: simple names upper-cased), Oracle DDL for constraints, statement
+  splitting, the long-values ingest options. `tests/conftest.py` creates the secondary
+  schema with `ADBC_ORACLE_TEST_ADMIN_URI`, fails (never skips) on missing settings or
+  zero passed tests, and accepts an actual column named `name.upper()` only where `name`
+  is an identifier Oracle folds.
+- `queries/oracle/` — per-case overrides (Oracle SQL; expected results from the README
+  type mapping, with a caveat per difference). Declare something unsupported only when
+  Oracle (or ADBC semantics for it) lacks it, never to hide a driver bug.
+- Bumping the suite: change the commit in `requirements.txt`, run it, review new cases.
+
 ## Conventions
 
 - **Go 1.25 floor** (per `go.mod`). Use generics where they help;

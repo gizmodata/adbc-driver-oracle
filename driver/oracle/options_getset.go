@@ -13,6 +13,9 @@ import (
 // ---- database ----
 
 func (d *databaseImpl) SetOption(key, value string) error {
+	if err := checkDatabaseOption(key); err != nil {
+		return err
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.opts[key] = value

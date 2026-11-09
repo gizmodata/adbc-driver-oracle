@@ -64,7 +64,7 @@ func (s *statementImpl) executeIngest(ctx context.Context) (int64, error) {
 			err = ins.Execute(ctx, ttc.ExecuteOptions{Binds: binds, NumRows: int(n), AutoCommit: s.conn.autoCommit})
 			slice.Release()
 			if err != nil {
-				return fromTTCError(err)
+				return s.ingestInsertError(fromTTCError(err))
 			}
 			total += int64(ins.RowCount())
 		}
@@ -92,6 +92,30 @@ func (s *statementImpl) executeIngest(ctx context.Context) (int64, error) {
 		}
 	}
 	return total, nil
+}
+
+// ingestInsertError reports an INSERT into a table the ingest did not create
+// that fails because the table's columns don't match the data (unknown
+// column, wrong number of values, incompatible type) as ADBC's
+// ALREADY_EXISTS: "the target table exists but has an incompatible schema".
+func (s *statementImpl) ingestInsertError(err error) error {
+	var ae adbc.Error
+	if !asADBC(err, &ae) {
+		return err
+	}
+	if s.ingestMode != adbc.OptionValueIngestModeAppend && s.ingestMode != adbc.OptionValueIngestModeCreateAppend {
+		return err
+	}
+	switch ae.VendorCode {
+	case 904, // ORA-00904: invalid identifier (no such column)
+		913, // ORA-00913: too many values
+		947, // ORA-00947: not enough values
+		932: // ORA-00932: inconsistent datatypes
+		ae.Code = adbc.StatusAlreadyExists
+		ae.Msg = "ingest: the target table exists but its schema does not match the data: " + ae.Msg
+		return ae
+	}
+	return err
 }
 
 func (s *statementImpl) qualifiedTarget() string {

@@ -323,16 +323,23 @@ func xdbcDataType(typeName string, integral bool) int16 {
 	return 1111
 }
 
-// listConstraints loads primary/unique/foreign keys for the schema.
+// listConstraints loads primary/unique/foreign keys and CHECK constraints for
+// the schema. Oracle stores a column's NOT NULL as a CHECK constraint whose
+// condition is `"COL" IS NOT NULL`; those describe nullability (reported per
+// column) and are left out. SEARCH_CONDITION_VC exists from 12.1, the oldest
+// server the driver supports.
 func (c *connectionImpl) listConstraints(ctx context.Context, schema string, tableFilter *string) (map[string][]constraintInfo, error) {
 	sb := strings.Builder{}
 	sb.WriteString(`SELECT K.TABLE_NAME, K.CONSTRAINT_NAME, T.CONSTRAINT_TYPE, K.COLUMN_NAME, K.POSITION, T.R_OWNER, T.R_CONSTRAINT_NAME
 FROM ALL_CONS_COLUMNS K JOIN ALL_CONSTRAINTS T ON T.OWNER = K.OWNER AND T.CONSTRAINT_NAME = K.CONSTRAINT_NAME AND T.TABLE_NAME = K.TABLE_NAME
 WHERE K.OWNER = `)
 	sb.WriteString(sqlString(schema))
-	sb.WriteString(" AND T.CONSTRAINT_TYPE IN ('P', 'U', 'R')")
+	sb.WriteString(" AND (T.CONSTRAINT_TYPE IN ('P', 'U', 'R') OR (T.CONSTRAINT_TYPE = 'C'" +
+		" AND (T.SEARCH_CONDITION_VC IS NULL OR T.SEARCH_CONDITION_VC <> '\"' || K.COLUMN_NAME || '\" IS NOT NULL')))")
 	appendLikeQual(&sb, "K.TABLE_NAME", tableFilter)
-	sb.WriteString(" ORDER BY K.TABLE_NAME, K.CONSTRAINT_NAME, K.POSITION")
+	// A CHECK constraint's columns have no POSITION: list them in table order.
+	sb.WriteString(" ORDER BY K.TABLE_NAME, K.CONSTRAINT_NAME, K.POSITION, (SELECT C.COLUMN_ID FROM ALL_TAB_COLUMNS C" +
+		" WHERE C.OWNER = K.OWNER AND C.TABLE_NAME = K.TABLE_NAME AND C.COLUMN_NAME = K.COLUMN_NAME)")
 	rows, err := c.queryAll(ctx, sb.String())
 	if err != nil {
 		return nil, err
