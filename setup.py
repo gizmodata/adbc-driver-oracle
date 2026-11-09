@@ -11,6 +11,7 @@ just be ``README.md`` — no parent-directory reference or mirror dance.
 """
 
 import os
+import platform
 import shutil
 import sys
 from pathlib import Path
@@ -58,6 +59,12 @@ class BinaryWheel(bdist_wheel):
         # CI builds the Linux library with `zig cc` targeting glibc 2.17 and
         # fails if it needs anything newer: built with the runner's gcc it
         # needed GLIBC_2.32 and failed to load on Oracle Linux 8.
+        # A python.org macOS Python reports ``universal2``, but the bundled
+        # library is built for this machine's architecture only (CI: arm64), so
+        # a universal2 tag would let pip install it on Intel Macs, where it can't
+        # load. Tag the architecture the library really has.
+        if plat.endswith("_universal2"):
+            plat = plat[: -len("universal2")] + platform.machine()
         if plat == "linux_x86_64":
             plat = "manylinux2014_x86_64"
         elif plat == "linux_aarch64":

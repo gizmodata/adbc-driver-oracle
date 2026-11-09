@@ -37,6 +37,11 @@ The driver now passes the [adbc-drivers.org driver validation suite](https://git
   resolve upper-cased as before.
 - `GetInfo`'s driver Arrow version is the arrow-go release the driver was built with (e.g.
   `v18.8.0`), not the fixed text `arrow-go/v18`.
+- **The macOS wheel claimed more than it supports.** It was tagged `macosx_12_0_universal2`, but
+  the bundled library is arm64-only and is built with Go 1.27, whose runtime needs macOS 13. pip
+  could install 1.0.2 on an Intel Mac or on macOS 12, where the driver can't load. The wheel is now
+  `macosx_13_0_arm64` (Intel Macs get no wheel, which pip reports as no matching distribution), and
+  CI fails if the wheel's tag doesn't match the library's minimum macOS and architecture.
 
 ### Changed
 
