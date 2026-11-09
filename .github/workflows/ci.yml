@@ -143,8 +143,9 @@ jobs:
             Windows) SUFFIX=dll   ;;
             *)       SUFFIX=so    ;;
           esac
-          go build -buildmode=c-shared -tags driverlib \
-            -o "pkg/oracle/libadbc_driver_oracle.${SUFFIX}" ./pkg/oracle
+          # The build script limits the exports to the ADBC entrypoints.
+          bash scripts/build_lib.sh "pkg/oracle/libadbc_driver_oracle.${SUFFIX}"
+          go run ./scripts/checkexports -allow OracleDriverInit "pkg/oracle/libadbc_driver_oracle.${SUFFIX}"
           LIB_PATH="$PWD/pkg/oracle/libadbc_driver_oracle.${SUFFIX}"
           if [ "${{ runner.os }}" = "Windows" ]; then
             # Git Bash $PWD is /d/a/... — translate to D:/a/... so that
@@ -241,6 +242,9 @@ jobs:
 
       - name: Build c-shared driver library
         run: make -C pkg/oracle
+
+      - name: Check the library's exports
+        run: go run ./scripts/checkexports -allow OracleDriverInit pkg/oracle/libadbc_driver_oracle.so
 
       - name: Install the validation suite (pinned)
         run: |
@@ -383,9 +387,15 @@ jobs:
           if [ "${{ matrix.goos }}" = "linux" ]; then
             export CC="zig cc -target $([ "${{ matrix.goarch }}" = arm64 ] && echo aarch64 || echo x86_64)-linux-gnu.2.17"
           fi
-          go build -buildmode=c-shared -tags driverlib \
-            -o "pkg/oracle/libadbc_driver_oracle.${{ matrix.ext }}" ./pkg/oracle
+          bash scripts/build_lib.sh "pkg/oracle/libadbc_driver_oracle.${{ matrix.ext }}"
           echo "ADBC_ORACLE_LIBRARY=$PWD/pkg/oracle/libadbc_driver_oracle.${{ matrix.ext }}" >> "$GITHUB_ENV"
+
+      - name: Check the library's exports
+        # ADBC shared-library requirements: AdbcDriverInit and AdbcDriverOracleInit
+        # (from the file name), nothing else without the Adbc prefix except the
+        # deprecated OracleDriverInit alias.
+        shell: bash
+        run: go run ./scripts/checkexports -allow OracleDriverInit "pkg/oracle/libadbc_driver_oracle.${{ matrix.ext }}"
 
       - name: Check the glibc ceiling (2.17, the manylinux2014 tag)
         if: ${{ matrix.goos == 'linux' }}
@@ -470,11 +480,19 @@ jobs:
           path: dist/*.whl
 
       - name: Stage c-shared library + checksum for release
+        # One archive per platform, holding the library under the name the driver
+        # manager expects (libadbc_driver_oracle.<ext>, so it derives the
+        # AdbcDriverOracleInit entrypoint) plus LICENSE and NOTICE. A renamed raw
+        # library (libadbc_driver_oracle-linux-amd64.so) made it look for
+        # AdbcDriverOracleLinuxAmd64Init.
         shell: bash
         run: |
-          mkdir -p release-artifacts
-          base="libadbc_driver_oracle-${{ matrix.goos }}-${{ matrix.goarch }}.${{ matrix.ext }}"
-          cp "pkg/oracle/libadbc_driver_oracle.${{ matrix.ext }}" "release-artifacts/${base}"
+          set -euo pipefail
+          mkdir -p release-artifacts stage
+          base="libadbc_driver_oracle-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
+          cp "pkg/oracle/libadbc_driver_oracle.${{ matrix.ext }}" LICENSE NOTICE stage/
+          tar -czf "release-artifacts/${base}" -C stage "libadbc_driver_oracle.${{ matrix.ext }}" LICENSE NOTICE
+          tar -tzvf "release-artifacts/${base}"
           if command -v sha256sum > /dev/null 2>&1; then
             (cd release-artifacts && sha256sum "${base}" > "${base}.sha256")
           else
@@ -599,10 +617,10 @@ jobs:
           mkdir -p release-bundle
           find artifacts -type d -name 'libadbc_driver_oracle-release-*' -exec cp -r {}/. release-bundle/ \;
           # One combined checksum manifest across every platform.
-          (cd release-bundle && find . -type f -name 'libadbc_driver_oracle-*' \
-             ! -name '*.sha256' -exec sha256sum {} \; > SHA256SUMS) \
-             || (cd release-bundle && find . -type f -name 'libadbc_driver_oracle-*' \
-                  ! -name '*.sha256' -exec shasum -a 256 {} \; > SHA256SUMS)
+          (cd release-bundle && sha256sum libadbc_driver_oracle-*.tar.gz > SHA256SUMS)
+          cat release-bundle/SHA256SUMS
+          # Five platforms: linux amd64/arm64, darwin arm64, windows amd64/arm64.
+          test "$(wc -l < release-bundle/SHA256SUMS)" -eq 5
           ls -la release-bundle/
 
       - name: Attach to GitHub Release

@@ -39,7 +39,7 @@ internal/tns/      TNS packet layer (CONNECT/ACCEPT/REDIRECT/DATA/MARKER), TLS, 
 internal/ttc/      TTC messages: negotiation, auth, open/execute/fetch/close, errors
 internal/oratype/  NUMBER, DATE/TIMESTAMP(TZ/LTZ), INTERVAL, RAW, ROWID, LOB codecs
 driver/oracle/     ADBC Driver/Database/Connection/Statement, options, Arrow conv, metadata, ingest
-pkg/oracle/        cgo c-shared wrapper — entrypoint OracleDriverInit (alias AdbcDriverOracleInit)
+pkg/oracle/        cgo c-shared wrapper — entrypoint AdbcDriverOracleInit (deprecated alias OracleDriverInit)
 python/            adbc_driver_oracle wheel sources + tests
 ```
 
@@ -60,7 +60,10 @@ also `tiger`). Integration tests (Go and Python) read
 **skip** if nothing is listening on the host:port. CI runs the same
 container as a GitHub Actions service on the Linux legs only.
 
-Build the c-shared lib for Python tests with `make -C pkg/oracle`, then
+Build the c-shared lib for Python tests with `make -C pkg/oracle` (it runs
+`scripts/build_lib.sh`, which limits the exports to `Adbc*` plus the deprecated
+`OracleDriverInit` alias via `pkg/oracle/exports_*`; check a build with
+`go run ./scripts/checkexports -allow OracleDriverInit <lib>`), then
 `ADBC_ORACLE_LIBRARY=$PWD/pkg/oracle/libadbc_driver_oracle.dylib pip install -e ".[test,hardcharger]"`
 and `pytest -v`. After rebuilding the lib, re-copy it into the editable
 package: `cp pkg/oracle/libadbc_driver_oracle.dylib python/adbc_driver_oracle/`.

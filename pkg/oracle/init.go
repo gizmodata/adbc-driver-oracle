@@ -27,8 +27,12 @@ package main
 // #include <string.h>
 import "C"
 
-// OracleDriverInit is the canonical short-form C ABI entrypoint, parallel
-// to FlightSQLDriverInit / SnowflakeDriverInit / etc.
+// OracleDriverInit is a deprecated alias of AdbcDriverOracleInit, the
+// entrypoint the ADBC driver manager derives from the library's file name
+// (libadbc_driver_oracle -> AdbcDriverOracleInit). Releases up to 1.0.3
+// documented this name, so existing driver manifests and code still load
+// with it; it is the only exported name without the Adbc prefix (see
+// exports_*.{map,txt,def}) and will be removed in 2.0.0.
 //
 //export OracleDriverInit
 func OracleDriverInit(version C.int, rawDriver *C.void, err *C.struct_AdbcError) C.AdbcStatusCode {

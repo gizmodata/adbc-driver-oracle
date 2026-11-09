@@ -102,7 +102,7 @@ url = 'https://github.com/gizmodata/adbc-driver-oracle'
 version = '1.1.0'
 
 [Driver]
-entrypoint = 'OracleDriverInit'
+entrypoint = 'AdbcDriverOracleInit'
 
 [Driver.shared]
 {_platform_tuple()} = '{driver_path}'

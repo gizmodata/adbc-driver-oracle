@@ -79,7 +79,7 @@ def test_readme_alternative_manager_pattern(oracle_server):
 
     with dbapi.connect(
         driver=adbc_driver_oracle._driver_path(),
-        entrypoint="OracleDriverInit",
+        entrypoint="AdbcDriverOracleInit",
         db_kwargs={"uri": oracle_server.uri},
     ) as conn, conn.cursor() as cur:
         cur.execute("SELECT 42 AS answer FROM DUAL")
