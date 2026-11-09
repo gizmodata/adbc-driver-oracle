@@ -357,14 +357,24 @@ jobs:
       - name: Install llvm-mingw (cgo C toolchain for windows/arm64)
         if: ${{ matrix.dll_only }}
         shell: bash
+        # A pinned, checksummed release, not "latest" through the GitHub API:
+        # that anonymous API call can be rate-limited and return no URL, which
+        # failed adbc-driver-oracle's v1.0.4 release run once.
+        env:
+          LLVM_MINGW_TAG: '20261104'
+          LLVM_MINGW_SHA256: 7d7f8387a8706639b0b47a629d6e23f8b3ef9acce67e9832b8cd4c5bb2816eab
         run: |
           set -euo pipefail
-          url=$(curl -s https://api.github.com/repos/mstorsjo/llvm-mingw/releases/latest \
-            | grep -o 'https://[^"]*ucrt-aarch64\.zip' | head -1)
-          echo "Downloading $url"
-          curl -sL "$url" -o llvm-mingw.zip
-          unzip -q llvm-mingw.zip -d "$RUNNER_TEMP/llvm-mingw"
-          tooldir=$(ls -d "$RUNNER_TEMP"/llvm-mingw/llvm-mingw-*)
+          name="llvm-mingw-${LLVM_MINGW_TAG}-ucrt-aarch64"
+          curl -fsSL --retry 5 --retry-all-errors -o "$RUNNER_TEMP/llvm-mingw.zip" \
+            "https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_MINGW_TAG}/${name}.zip"
+          actual=$(sha256sum < "$RUNNER_TEMP/llvm-mingw.zip" | cut -d' ' -f1)
+          if [ "$actual" != "$LLVM_MINGW_SHA256" ]; then
+            echo "::error::${name}.zip has SHA-256 $actual, expected $LLVM_MINGW_SHA256"
+            exit 1
+          fi
+          unzip -q "$RUNNER_TEMP/llvm-mingw.zip" -d "$RUNNER_TEMP/llvm-mingw"
+          tooldir="$RUNNER_TEMP/llvm-mingw/${name}"
           echo "$tooldir/bin" >> "$GITHUB_PATH"
           echo "CC=$tooldir/bin/aarch64-w64-mingw32-clang" >> "$GITHUB_ENV"
 
