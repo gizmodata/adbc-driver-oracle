@@ -6,6 +6,23 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-11-09
+
+### Added
+
+- **10g (O3LOGON) password verifiers, opt-in via `adbc.oracle.allow_10g_verifier=true`**
+  (also `?allow_10g_verifier=true` on the URI) ([#2](https://github.com/gizmodata/adbc-driver-oracle/issues/2)).
+  Accounts whose only password verifier is the pre-11g, DES-based one failed with
+  `oracle: unsupported password verifier type 0x939`. They can now log in when the option is
+  set. It is off by default because the 10g hash is weak (DES, case-insensitive, salted only by
+  the user name): a man-in-the-middle on a connection without TLS could answer any login with a
+  10g challenge and get an offline-crackable hash of the password. Without the option, a 10g
+  challenge now fails before anything derived from the password is sent, with an error that
+  names the option and the risk. 11g and 12c verifiers are unchanged (11g already worked).
+  The 10g hash and session-key steps are ported from [go-ora](https://github.com/sijms/go-ora)
+  (MIT; see NOTICE). Tested against Oracle XE 21 with 10g-, 11g- and 12c-only accounts
+  (`scripts/setup_verifier_users.sh`); Oracle 23ai and later can no longer hold a 10g verifier.
+
 ### Changed
 
 - CI: the windows/arm64 build downloads a pinned, checksummed llvm-mingw (20261104) instead

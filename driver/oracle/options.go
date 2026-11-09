@@ -112,6 +112,11 @@ const (
 	OptionSDU = "adbc.oracle.sdu"
 	// OptionToken authenticates with an OAuth / IAM bearer token (TLS only).
 	OptionToken = "adbc.oracle.token"
+	// OptionAllow10gVerifier: "true" lets accounts that have only a 10g
+	// (O3LOGON, DES-based) password verifier log in. Off by default: the 10g
+	// hash is weak, and a man-in-the-middle on a non-TLS connection could
+	// request it for any account to get an offline-crackable password hash.
+	OptionAllow10gVerifier = "adbc.oracle.allow_10g_verifier"
 
 	// Statement options for bulk ingest.
 	OptionIngestBatchRows     = "adbc.oracle.ingest.batch_rows"
@@ -205,7 +210,7 @@ var databaseOptions = map[string]struct{}{
 	OptionTrace: {}, OptionMode: {}, OptionSessionTimeZone: {}, OptionNumberMode: {}, OptionIntervalMode: {},
 	OptionDateMode: {}, OptionBatchBytes: {}, OptionDisableOOB: {}, OptionUseExtensionTypes: {}, OptionNNE: {},
 	OptionNNEChecksum: {}, OptionNNEEncryptionAlgorithms: {}, OptionNNEChecksumAlgorithms: {}, OptionSDU: {},
-	OptionToken: {},
+	OptionToken: {}, OptionAllow10gVerifier: {},
 }
 
 // checkDatabaseOption returns ADBC's NOT_IMPLEMENTED for a key the database
@@ -319,6 +324,8 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 			cfg.batchBytes = n
 		case "disable_oob":
 			cfg.ttc.DisableOOB = isTrue(v)
+		case "allow_10g_verifier":
+			cfg.ttc.Allow10gVerifier = isTrue(v)
 		case "use_extension_types":
 			cfg.types.useExtensionTypes = isTrue(v)
 		case "nne", "encryption":
@@ -524,6 +531,8 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 			cfg.batchBytes = n
 		case OptionDisableOOB:
 			cfg.ttc.DisableOOB = isTrue(v)
+		case OptionAllow10gVerifier:
+			cfg.ttc.Allow10gVerifier = isTrue(v)
 		case OptionUseExtensionTypes:
 			cfg.types.useExtensionTypes = isTrue(v)
 		case OptionNNE:
