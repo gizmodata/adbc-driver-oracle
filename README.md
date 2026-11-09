@@ -30,7 +30,10 @@ Distributed as:
 > **Status:** Stable (1.0.0). Tested against Oracle Database 23ai Free;
 > the wire protocol targets Oracle 12.1 and later (the same range as
 > python-oracledb thin mode). See [Limitations](#limitations) for what
-> is not covered.
+> is not covered. Every change is checked against the
+> [adbc-drivers.org driver validation suite](https://github.com/adbc-drivers/validation)
+> (the ADBC conformance tests) on Oracle 23ai; [`validation/`](validation/) lists what
+> is adapted for Oracle.
 
 ## Quickstart
 
@@ -462,6 +465,11 @@ bind variables; native `:name` / `:1` styles pass through untouched:
 cur.execute("SELECT ename, sal FROM emp WHERE deptno = ? AND sal > ?", (10, 1500))
 ```
 
+DML runs once per bound row as Oracle array DML, across every batch of a bound
+stream (`executemany`, `adbc_statement.bind_stream`). A query bound to several rows
+runs once per row and returns the results one after the other. Dictionary-encoded
+columns (e.g. pandas categoricals) bind as their values.
+
 ## Connection URL
 
 ```
@@ -509,6 +517,10 @@ descriptors are accepted in place of the `oracle://` form.
 
 All of these are also accepted as `?key=value` URI query parameters
 (without the `adbc.oracle.` prefix, e.g. `?tls=true&number_mode=decimal`).
+A database option the driver doesn't know is refused with `NOT_IMPLEMENTED`, so a
+misspelt key fails instead of being ignored; standard ADBC connection, statement and
+ingest keys (`adbc.connection.*`, `adbc.statement.*`, `adbc.ingest.*`) set at the
+database level are still accepted.
 After connecting, `adbc.oracle.batch_size`, `adbc.oracle.batch_bytes`,
 `adbc.oracle.prefetch_rows`, `adbc.oracle.number_mode`,
 `adbc.oracle.interval_mode`, `adbc.oracle.date_mode` and the end-to-end tracing attributes
@@ -619,13 +631,13 @@ Reads (`adbc.oracle.number_mode=auto`, the default):
 | Oracle type                              | Arrow type                                   |
 |------------------------------------------|----------------------------------------------|
 | `NUMBER(p,0)` with 1 ≤ p ≤ 18            | `int64`                                      |
-| `NUMBER(p,s)` with 1 ≤ p ≤ 38            | `decimal128(p,s)`                            |
-| `NUMBER` (no precision), `FLOAT`, computed expressions (`COUNT(*)`, `1/3`, literals) | `float64` |
+| `NUMBER(p,s)` with 1 ≤ p ≤ 38, 0 ≤ s ≤ p  | `decimal128(p,s)`                            |
+| `NUMBER` (no precision), `NUMBER(p,s)` with a negative scale, `FLOAT`, computed expressions (`COUNT(*)`, `1/3`, literals) | `float64` |
 | `BINARY_FLOAT` / `BINARY_DOUBLE`         | `float32` / `float64`                        |
 | `CHAR`, `VARCHAR2`, `NCHAR`, `NVARCHAR2`, `LONG`, `CLOB`, `NCLOB` | `utf8`               |
 | `RAW`, `LONG RAW`, `BLOB`                | `binary`                                     |
 | `DATE`                                   | `timestamp[s]` (`date32` with `date_mode=date32`) |
-| `TIMESTAMP(n)`                           | `timestamp[s / ms / us / ns]` by fractional-second precision n |
+| `TIMESTAMP(n)`                           | `timestamp[s / ms / us / ns]` by fractional-second precision n (n ≥ 7: nanoseconds, which only reach 1677-09-21 to 2262-04-11; a value outside that range is refused with `INVALID_DATA`, so `CAST` it to `TIMESTAMP(6)`) |
 | `TIMESTAMP WITH TIME ZONE` / `WITH LOCAL TIME ZONE` | `timestamp[…, tz=UTC]` (the instant; the original offset is not kept) |
 | `INTERVAL DAY TO SECOND`                 | `month_day_nano_interval`; `duration[unit by precision]` with `interval_mode=duration`; ISO-8601 `utf8` (`P1DT2H3M4.5S`) with `interval_mode=string` |
 | `INTERVAL YEAR TO MONTH`                 | `month_day_nano_interval`; ISO-8601 `utf8` (`P2Y3M`) with `interval_mode=string` |
@@ -656,8 +668,14 @@ Writes (bind parameters and bulk-ingest DDL):
 | `timestamp[unit, tz]`            | `TIMESTAMP WITH TIME ZONE` (as UTC) | `TIMESTAMP(n) WITH TIME ZONE` |
 | `duration`, `month_day_nano_interval` (no months) | `INTERVAL DAY TO SECOND` | `INTERVAL DAY(9) TO SECOND(9)` |
 | `list`, `struct`, `map`          | `VARCHAR2` / `LONG` (JSON text) | `JSON` (21c+) — see `ingest.struct_type` |
+| `dictionary<…>`                  | as its value type  | as its value type                      |
 
-Empty strings are bound as NULL, matching Oracle's own `''` semantics.
+Empty strings are bound as NULL, matching Oracle's own `''` semantics. Oracle has no
+`TIME` type, so Arrow `time32` / `time64` values can't be bound or ingested.
+
+Appending (`append`, `create_append`) to an existing table whose columns don't match
+the data fails with ADBC's `ALREADY_EXISTS` ("the target table exists but has an
+incompatible schema").
 
 ## Limitations
 
@@ -692,6 +710,7 @@ adbc-driver-oracle/
 ├── driver/oracle/   — pure-Go ADBC Driver/Database/Connection/Statement impl
 ├── pkg/oracle/      — cgo c-shared wrapper (produces libadbc_driver_oracle.{so,dylib,dll})
 ├── python/          — Python wheel sources (adbc_driver_oracle)
+├── validation/      — adbc-drivers.org driver validation suite: Oracle quirks + query overrides (test-only)
 └── .github/         — CI: go test, python tests (Oracle Free + Hardcharger), wheel matrix, PyPI publish
 ```
 

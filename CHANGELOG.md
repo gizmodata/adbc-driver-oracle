@@ -6,6 +6,58 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-11-09
+
+The driver now passes the [adbc-drivers.org driver validation suite](https://github.com/adbc-drivers/validation)
+(the ADBC conformance tests) against Oracle 23ai. Running it found the fixes below.
+
+### Fixed
+
+- **`TIMESTAMP` and `DATE` values before 1677-09-21 or after 2262-04-11 were read back as wrong
+  dates** when the column maps to `timestamp[ms]` or `timestamp[us]` (`TIMESTAMP(1)` to
+  `TIMESTAMP(6)`), and as text inside JSON and object-type values: `0001-01-01` came back as
+  `1754-08-30`, `9999-12-31` as `1816-03-30`. The conversion went through int64 nanoseconds,
+  which overflow outside that range. Every Oracle date (years 1 to 9999) now reads back exactly; a
+  `TIMESTAMP(7..9)` value that `timestamp[ns]` can't hold fails with `INVALID_DATA` instead of
+  wrapping. `date_mode=date32` now gives a pre-1970 value with a time of day its own date.
+- **A bound parameter stream ran only its first batch.** `executemany` over several batches, or
+  `bind_stream` with DML, silently skipped every later batch; an empty batch (or an empty bound
+  record) panicked the driver (`index out of range`), leaving it unusable until the process
+  restarted. Every batch now runs, empty ones are skipped, and the row count is the total.
+- A query bound to several parameter rows failed (`cannot execute a query with multiple bind
+  rows`); it now runs once per row and returns the results in order, as ADBC specifies.
+- Dictionary-encoded columns (e.g. pandas categoricals) can be bound and ingested (as their
+  value type); they were refused.
+- Appending to an existing table whose columns don't match the data now fails with ADBC's
+  `ALREADY_EXISTS` (was `INVALID_ARGUMENT`).
+- `GetObjects` reports `CHECK` constraints (it listed only primary, unique and foreign keys).
+  Oracle's own `NOT NULL` constraints stay out: nullability is reported per column.
+- `GetTableSchema` finds a table by its exact name first, so a table created with a quoted
+  lower- or mixed-case name (as `GetObjects` reports it) is found; unquoted-style names still
+  resolve upper-cased as before.
+- `GetInfo`'s driver Arrow version is the arrow-go release the driver was built with (e.g.
+  `v18.8.0`), not the fixed text `arrow-go/v18`.
+
+### Changed
+
+- An unknown database option is refused with `NOT_IMPLEMENTED`, as ADBC specifies, so a misspelt
+  key fails instead of being ignored. Standard ADBC connection, statement and ingest keys
+  (`adbc.connection.*`, `adbc.statement.*`, `adbc.ingest.*`) set at the database level are still
+  accepted.
+- README type mapping: `NUMBER` with a negative scale maps to `float64` (it always did; the table
+  said `decimal128`).
+- CI runs the validation suite (`validation/`, a pinned test-only dependency) against an Oracle
+  service container, and wheels, PyPI and the GitHub Release now also wait for it. It fails,
+  never skips, when the server is unreachable or a setting is missing.
+- `make -C pkg/oracle` always runs `go build` (Go's cache skips unchanged work); it used to keep a
+  stale library after changes outside `pkg/oracle`.
+- Dependencies: golang.org/x/{exp,mod,sync,sys,tools}, goccy/go-json 0.12, klauspost/compress
+  1.20.4, klauspost/cpuid 2.4.2, pierrec/lz4 4.1.33, go.yaml.in/yaml 3.0.6 (arrow-adbc 1.13.0 and
+  arrow-go 18.8.0 are the latest releases already). Test extras: pytest 9.2, pandas 3.1.1,
+  hardcharger 2.10. Go 1.27.3 in CI and the GitHub Actions versions were already current. The
+  runtime floors (`adbc-driver-manager`, `pyarrow`) are unchanged: their latest releases need
+  Python 3.11+, and this patch keeps Python 3.10.
+
 ## [1.0.2] - 2026-10-27
 
 ### Added

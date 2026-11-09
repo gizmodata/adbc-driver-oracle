@@ -48,9 +48,9 @@ classifiers = [
 dbapi = ["pandas"]
 # Latest floors; Python 3.10 gets each package's last release that supports it.
 test = [
-    "pandas >=3.1.0; python_version >= '3.11'",
+    "pandas >=3.1.1; python_version >= '3.11'",
     "pandas >=2.3.3; python_version < '3.11'",
-    "pytest >=9.1.1",
+    "pytest >=9.2.0",
     "duckdb >=2.0.0; python_version >= '3.11'",
     "duckdb >=1.5.6; python_version < '3.11'",
     "shapely >=2.2.0; python_version >= '3.11'",
@@ -58,7 +58,7 @@ test = [
 ]
 # Oracle -> Hardcharger integration tests (https://gizmodata.com/hardcharger): the
 # server package and its ADBC client. The client needs Python 3.11 or later.
-hardcharger = ["hardcharger[adbc] >=2.1.0; python_version >= '3.11'"]
+hardcharger = ["hardcharger[adbc] >=2.10.0; python_version >= '3.11'"]
 
 [project.urls]
 homepage = "https://github.com/gizmodata/adbc-driver-oracle"

@@ -3,6 +3,7 @@ package oratype
 import (
 	"encoding/binary"
 	"errors"
+	"math"
 	"time"
 )
 
@@ -61,12 +62,44 @@ func DecodeDate(b []byte) (Date, error) {
 	return d, nil
 }
 
-// UnixNanos returns the value as nanoseconds since the Unix epoch. Oracle
-// transmits TIMESTAMP WITH TIME ZONE values as UTC wall-clock plus the
-// display offset, so the fields are always interpreted as UTC; naive
-// DATE/TIMESTAMP values are treated as UTC wall-clock too.
+// Time returns the value as a UTC time.Time. Oracle transmits TIMESTAMP
+// WITH TIME ZONE values as UTC wall-clock plus the display offset, so the
+// fields are always interpreted as UTC; naive DATE/TIMESTAMP values are
+// treated as UTC wall-clock too.
+func (d Date) Time() time.Time {
+	return time.Date(d.Year, time.Month(d.Month), d.Day, d.Hour, d.Minute, d.Second, d.Nanosecond, time.UTC)
+}
+
+// UnixNanos returns the value as nanoseconds since the Unix epoch. It is
+// only meaningful between 1677-09-21 and 2262-04-11 (int64 nanoseconds);
+// use UnixUnit for any other value.
 func (d Date) UnixNanos() int64 {
-	return time.Date(d.Year, time.Month(d.Month), d.Day, d.Hour, d.Minute, d.Second, d.Nanosecond, time.UTC).UnixNano()
+	return d.Time().UnixNano()
+}
+
+// UnixUnit returns the value as a count of 1/perSecond-second units since
+// the Unix epoch (perSecond is 1, 1e3, 1e6 or 1e9), truncating finer
+// digits. ok is false when the count doesn't fit in an int64 (only possible
+// for nanoseconds: Oracle's years 1..9999 always fit in micro- and
+// milliseconds).
+func (d Date) UnixUnit(perSecond int64) (v int64, ok bool) {
+	secs := d.Unix() // floor: sub below is the non-negative remainder
+	sub := int64(d.Nanosecond) / (int64(time.Second) / perSecond)
+	if secs > (math.MaxInt64-sub)/perSecond {
+		return 0, false
+	}
+	lo := math.MinInt64 / perSecond // rounds toward zero, so lo*perSecond fits
+	if secs >= lo {
+		return secs*perSecond + sub, true
+	}
+	if perSecond > 1 && secs == lo-1 {
+		// One second below lo: fits only if the remainder brings it back up to
+		// MinInt64 (1677-09-21T00:12:43.145224192 is exactly MinInt64 ns).
+		if p := lo * perSecond; p-math.MinInt64 >= perSecond-sub {
+			return p - perSecond + sub, true
+		}
+	}
+	return 0, false
 }
 
 // Unix returns whole seconds since the epoch.

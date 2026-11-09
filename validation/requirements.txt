@@ -1,0 +1,4 @@
+# The adbc-drivers.org driver validation suite, used only as a pinned test dependency.
+# Pinned to the commit this driver was validated against: bump it deliberately and run
+# the suite when moving it.
+adbc-drivers-validation @ git+https://github.com/adbc-drivers/validation@f0631651f79bd01b67c5776be6fe3b7fbfbe083b

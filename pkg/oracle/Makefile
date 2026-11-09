@@ -15,10 +15,13 @@ endif
 
 LIB := libadbc_driver_oracle.$(SUFFIX)
 
-.PHONY: all clean
+# Always run `go build`: the library depends on every package under driver/ and
+# internal/, and Go's build cache already skips the work when nothing changed. (A
+# prerequisite list of the files in this directory left stale libraries behind.)
+.PHONY: all clean $(LIB)
 all: $(LIB)
 
-$(LIB): driver.go init.go utils.c utils.h adbc.h ../../go.mod ../../go.sum
+$(LIB):
 	cd ../.. && go build -buildmode=c-shared -tags driverlib \
 		-o pkg/oracle/$(LIB) ./pkg/oracle
 

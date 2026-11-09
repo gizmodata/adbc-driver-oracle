@@ -392,7 +392,12 @@ func (s *arrowSink) makeAppender(c *ttc.Column, b array.Builder) func([]byte) er
 				if err != nil {
 					return err
 				}
-				db.Append(arrow.Date32(d.Unix() / 86400))
+				secs := d.Unix()
+				days := secs / 86400
+				if secs%86400 < 0 {
+					days-- // floor: a time of day before 1970 still belongs to its own date
+				}
+				db.Append(arrow.Date32(days))
 				return nil
 			}
 		}
@@ -403,16 +408,10 @@ func (s *arrowSink) makeAppender(c *ttc.Column, b array.Builder) func([]byte) er
 			if err != nil {
 				return err
 			}
-			var v int64
-			switch unit {
-			case arrow.Second:
-				v = d.Unix()
-			case arrow.Millisecond:
-				v = d.UnixNanos() / int64(time.Millisecond)
-			case arrow.Microsecond:
-				v = d.UnixNanos() / int64(time.Microsecond)
-			default:
-				v = d.UnixNanos()
+			perSecond := map[arrow.TimeUnit]int64{arrow.Second: 1, arrow.Millisecond: 1e3, arrow.Microsecond: 1e6, arrow.Nanosecond: 1e9}[unit]
+			v, ok := d.UnixUnit(perSecond)
+			if !ok {
+				return errStatus(adbc.StatusInvalidData, "oracle: %s is outside the range of timestamp[%s] (1677-09-21 to 2262-04-11 for nanoseconds)", d.Time().Format("2006-01-02T15:04:05.999999999"), unit)
 			}
 			bb.Append(arrow.Timestamp(v))
 			return nil
@@ -681,6 +680,19 @@ func bindForArray(col arrow.Array, field arrow.Field, maxString uint32, supports
 			b.OraTypeNum = ttc.TypeLong
 			b.BufferSize = 0x7fffffff
 		}
+	case *array.Dictionary:
+		// Bind the dictionary's values and look each row up through its index.
+		inner, err := bindForArray(a.Dictionary(), field, maxString, supportsBool)
+		if err != nil {
+			return b, err
+		}
+		b = inner
+		b.Value = func(i int) ([]byte, error) {
+			if a.IsNull(i) {
+				return nil, nil
+			}
+			return inner.Value(a.GetValueIndex(i))
+		}
 	default:
 		return b, errStatus(adbc.StatusNotImplemented, "oracle: cannot bind Arrow type %s (column %q)", col.DataType(), field.Name)
 	}
@@ -780,6 +792,8 @@ func oracleTypeForArrow(dt arrow.DataType, s *statementImpl, supportsBool bool) 
 		binaryType = "RAW"
 	}
 	switch t := dt.(type) {
+	case *arrow.DictionaryType:
+		return oracleTypeForArrow(t.ValueType, s, supportsBool)
 	case *arrow.NullType:
 		return "VARCHAR2(1)", nil
 	case *arrow.BooleanType:

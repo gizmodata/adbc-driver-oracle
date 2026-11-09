@@ -128,6 +128,25 @@ func driverVersion() string {
 	return Version
 }
 
+// arrowVersion is the arrow-go module version this binary was built with (e.g. "v18.8.0"),
+// read from the build info the way arrow-adbc's driverbase does.
+func arrowVersion() string {
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, dep := range info.Deps {
+			if !strings.HasPrefix(dep.Path, "github.com/apache/arrow-go/") {
+				continue
+			}
+			if dep.Replace != nil && dep.Replace.Version != "" {
+				return dep.Replace.Version
+			}
+			if dep.Version != "" {
+				return dep.Version
+			}
+		}
+	}
+	return "v18"
+}
+
 func (c *connectionImpl) getInfoImpl(ctx context.Context, infoCodes []adbc.InfoCode) (array.RecordReader, error) {
 	if len(infoCodes) == 0 {
 		infoCodes = supportedInfoCodes
@@ -163,7 +182,7 @@ func (c *connectionImpl) getInfoImpl(ctx context.Context, infoCodes []adbc.InfoC
 			strBldr.Append(driverVersion())
 		case adbc.InfoDriverArrowVersion:
 			valueBldr.Append(int8(adbc.InfoValueStringType))
-			strBldr.Append("arrow-go/v18")
+			strBldr.Append(arrowVersion())
 		case adbc.InfoDriverADBCVersion:
 			valueBldr.Append(int8(adbc.InfoValueInt64Type))
 			int64Bldr.Append(adbc.AdbcVersion1_1_0)
@@ -196,16 +215,34 @@ func (c *connectionImpl) getTableTypesImpl(context.Context) (array.RecordReader,
 // ---- GetTableSchema ----
 
 func (c *connectionImpl) getTableSchemaImpl(ctx context.Context, catalog, dbSchema *string, tableName string) (*arrow.Schema, error) {
-	var qualified string
-	if dbSchema != nil && *dbSchema != "" {
-		qualified = identFor(*dbSchema) + "." + identFor(tableName)
-	} else {
-		qualified = identFor(tableName)
+	// Names are matched exactly first, as GetObjects reports them (a table
+	// created as "mixedCase" is found by that name); then, for compatibility,
+	// the way Oracle reads them unquoted (customers -> CUSTOMERS).
+	quote := func(name string) string { return `"` + strings.ReplaceAll(name, `"`, `""`) + `"` }
+	qualify := func(ident func(string) string) string {
+		if dbSchema != nil && *dbSchema != "" {
+			return ident(*dbSchema) + "." + ident(tableName)
+		}
+		return ident(tableName)
 	}
-	st := c.conn.Prepare("SELECT * FROM " + qualified)
-	defer st.Close()
-	if err := st.Describe(ctx); err != nil {
-		return nil, fromTTCError(err)
+	candidates := []string{qualify(quote)}
+	if folded := qualify(identFor); folded != candidates[0] {
+		candidates = append(candidates, folded)
 	}
-	return schemaFor(st.Columns(), c.cfg.types), nil
+	var err error
+	for _, qualified := range candidates {
+		st := c.conn.Prepare("SELECT * FROM " + qualified)
+		err = st.Describe(ctx)
+		if err == nil {
+			schema := schemaFor(st.Columns(), c.cfg.types)
+			st.Close()
+			return schema, nil
+		}
+		st.Close()
+		var ae adbc.Error
+		if err = fromTTCError(err); !asADBC(err, &ae) || ae.VendorCode != 942 {
+			return nil, err
+		}
+	}
+	return nil, err
 }

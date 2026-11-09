@@ -9,15 +9,17 @@ on:
   workflow_dispatch:
 
 # One workflow, one DAG:
-#   ┌─ go-test ─┐
-#   │           ├─> wheels ──> publish (PyPI)
-#   └─ test  ───┘            ╲
-#                              └─> github-release
+#   ┌─ go-test ───┐
+#   ├─ test ──────┼─> wheels ──> publish (PyPI)
+#   └─ validation ┘            ╲
+#                                └─> github-release
 #
 # - go-test runs `go vet` + `go test -race ./...` on linux + macOS
-# - test runs the Python unit + integration suite (5 Pythons × 3 OS)
+# - test runs the Python unit + integration suite (6 Pythons × 3 OS)
+# - validation runs the adbc-drivers.org driver validation suite against
+#   Oracle 23ai (validation/README.md); it fails, never skips, without a server
 # - both run on every PR, branch push, and tag push
-# - wheels run only on tag push, gated on **both** test suites passing
+# - wheels run only on tag push, gated on all three test jobs passing
 # - publish (PyPI) and github-release run only on tag push, gated on
 #   all wheels building successfully
 
@@ -204,6 +206,58 @@ jobs:
             *.log
             python/*.log
 
+  validation:
+    name: ADBC validation suite
+    runs-on: ubuntu-latest
+    services:
+      oracle:
+        image: gvenzl/oracle-free:23-slim-faststart
+        env:
+          ORACLE_PASSWORD: tiger
+          APP_USER: scott
+          APP_USER_PASSWORD: tiger
+        ports:
+          - 1521:1521
+        options: >-
+          --health-cmd healthcheck.sh
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      ADBC_ORACLE_TEST_URI: oracle://scott:tiger@127.0.0.1:1521/FREEPDB1
+      ADBC_ORACLE_TEST_ADMIN_URI: oracle://system:tiger@127.0.0.1:1521/FREEPDB1
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.3'
+          cache: false
+
+      - uses: actions/setup-python@v7
+        with:
+          # The suite needs Python 3.13+.
+          python-version: '3.14'
+
+      - name: Build c-shared driver library
+        run: make -C pkg/oracle
+
+      - name: Install the validation suite (pinned)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r validation/requirements.txt
+
+      - name: Run the validation suite
+        run: python -m pytest -rfEsxX --junit-xml=validation-report.xml validation/tests/
+
+      - name: Upload validation report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: validation-report
+          path: validation-report.xml
+          if-no-files-found: ignore
+
   wheels:
     # Builds the wheel AND smoke-tests it from a clean venv, so
     # packaging bugs (wrong-binary-bundled, missing dep, wrong platform
@@ -211,7 +265,7 @@ jobs:
     # Runs on every PR / branch / tag push; only publish + release jobs
     # are tag-gated.
     name: Wheel ${{ matrix.os }} ${{ matrix.arch }}
-    needs: [go-test, test]
+    needs: [go-test, test, validation]
     runs-on: ${{ matrix.runner }}
     services:
       oracle:

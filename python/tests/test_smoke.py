@@ -306,6 +306,51 @@ def test_executemany(oracle_server, table_name):
             drop_table_quietly(cur, table_name)
 
 
+def test_bind_stream_runs_every_batch(oracle_server, table_name):
+    # 1.0.2 ran only the first batch of a bound stream, and an empty batch panicked.
+    schema = pa.schema([("id", pa.int64())])
+    batches = [
+        pa.record_batch([pa.array([], type=pa.int64())], schema=schema),
+        pa.record_batch([pa.array([1, 2])], schema=schema),
+        pa.record_batch([pa.array([], type=pa.int64())], schema=schema),
+        pa.record_batch([pa.array([3])], schema=schema),
+    ]
+    with _connect(oracle_server) as conn, conn.cursor() as cur:
+        drop_table_quietly(cur, table_name)
+        cur.execute(f"CREATE TABLE {table_name} (id NUMBER(10))")
+        try:
+            cur.adbc_statement.set_sql_query(f"INSERT INTO {table_name} VALUES (?)")
+            cur.adbc_statement.bind_stream(pa.RecordBatchReader.from_batches(schema, batches))
+            assert cur.adbc_statement.execute_update() == 3
+            cur.execute(f"SELECT id FROM {table_name} ORDER BY id")
+            assert cur.fetchall() == [(1,), (2,), (3,)]
+        finally:
+            drop_table_quietly(cur, table_name)
+
+
+def test_dates_outside_the_nanosecond_range(oracle_server):
+    # Oracle dates span years 1..9999; 1.0.2 converted through int64 nanoseconds
+    # (1677..2262) and returned 0001-01-01 as 1754-08-30.
+    import adbc_driver_oracle.dbapi as oracle
+
+    with _connect(oracle_server) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT CAST(TIMESTAMP '0001-01-01 00:00:00' AS TIMESTAMP(6)) AS lo,"
+            " CAST(TIMESTAMP '9999-12-31 23:59:59.999999' AS TIMESTAMP(6)) AS hi,"
+            " JSON_OBJECT('d' VALUE TIMESTAMP '0001-01-01 00:00:00' RETURNING JSON) AS j FROM DUAL"
+        )
+        lo, hi, j = cur.fetchone()
+        assert lo == datetime.datetime(1, 1, 1)
+        assert hi == datetime.datetime(9999, 12, 31, 23, 59, 59, 999999)
+        assert json.loads(j) == {"d": "0001-01-01T00:00:00"}
+    with oracle.connect(
+        uri=oracle_server.uri, db_kwargs={"adbc.oracle.date_mode": "date32"}, autocommit=True
+    ) as conn, conn.cursor() as cur:
+        # A pre-1970 DATE with a time of day keeps its own date (was the next day).
+        cur.execute("SELECT TO_DATE('1960-01-02 12:00:00', 'YYYY-MM-DD HH24:MI:SS') AS d FROM DUAL")
+        assert cur.fetchone() == (datetime.date(1960, 1, 2),)
+
+
 def test_null_handling(oracle_server, table_name):
     with _connect(oracle_server) as conn, conn.cursor() as cur:
         drop_table_quietly(cur, table_name)

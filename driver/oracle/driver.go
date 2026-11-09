@@ -33,6 +33,11 @@ func (d *driverImpl) NewDatabase(opts map[string]string) (adbc.Database, error) 
 }
 
 func (d *driverImpl) NewDatabaseWithContext(_ context.Context, opts map[string]string) (adbc.Database, error) {
+	for key := range opts {
+		if err := checkDatabaseOption(key); err != nil {
+			return nil, err
+		}
+	}
 	return &databaseImpl{alloc: d.alloc, opts: cloneMap(opts)}, nil
 }
 
@@ -43,6 +48,11 @@ type databaseImpl struct {
 }
 
 func (d *databaseImpl) SetOptions(opts map[string]string) error {
+	for k := range opts {
+		if err := checkDatabaseOption(k); err != nil {
+			return err
+		}
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	for k, v := range opts {
@@ -463,14 +473,28 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, i
 		return nil, -1, errStatus(adbc.StatusInvalidState, "ExecuteQuery: no SQL set")
 	}
 	st := s.statement()
-	binds, numRows, err := s.bindColumns(st)
-	if err != nil {
-		return nil, -1, err
-	}
 	defer s.clearBound()
 	if !st.IsQuery() {
-		if err := st.Execute(ctx, ttc.ExecuteOptions{Binds: binds, NumRows: numRows, AutoCommit: s.conn.autoCommit}); err != nil {
-			return nil, -1, fromTTCError(err)
+		var binds []ttc.BindColumn
+		var rows int64
+		executions, err := s.forEachBindBatch(st, func(batch []ttc.BindColumn, numRows int) error {
+			if err := st.Execute(ctx, ttc.ExecuteOptions{Binds: batch, NumRows: numRows, AutoCommit: s.conn.autoCommit}); err != nil {
+				return fromTTCError(err)
+			}
+			binds = batch
+			rows += int64(st.RowCount())
+			return nil
+		})
+		if err != nil {
+			return nil, -1, err
+		}
+		if executions != 1 {
+			// Several parameter batches (or none): report the total row count.
+			rr, err := array.NewRecordReader(arrow.NewSchema([]arrow.Field{}, nil), nil)
+			if err != nil {
+				return nil, -1, err
+			}
+			return rr, rows, nil
 		}
 		// A PL/SQL block may hand back an implicit result set
 		// (DBMS_SQL.RETURN_RESULT) — stream it like a query.
@@ -501,6 +525,48 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, i
 		}
 		return rr, int64(st.RowCount()), nil
 	}
+	params, err := s.queryParams(st)
+	if err != nil {
+		return nil, -1, err
+	}
+	defer func() {
+		for _, rec := range params {
+			rec.Release()
+		}
+	}()
+	rows := int64(0)
+	for _, rec := range params {
+		rows += rec.NumRows()
+	}
+	if rows > 1 {
+		// ADBC: a query bound to several parameter rows runs once per row and
+		// returns the results one after the other. Oracle can't array-execute a
+		// query, so execute row by row and hand back the collected batches.
+		s.prepared = nil
+		st.Close()
+		return s.executeQueryPerRow(ctx, params)
+	}
+	var binds []ttc.BindColumn
+	numRows := 1
+	if len(params) == 1 {
+		if binds, numRows, err = s.bindColumns(st, params[0]); err != nil {
+			return nil, -1, err
+		}
+	}
+	reader, err := s.startQuery(ctx, st, binds, numRows)
+	if err != nil {
+		return nil, -1, err
+	}
+	// The statement is now owned by the reader until it is released; the
+	// next ExecuteQuery on this ADBC statement re-prepares.
+	s.prepared = nil
+	return reader, -1, nil
+}
+
+// startQuery executes a query and returns a reader that streams its rows.
+// The reader owns st from then on (it closes it when released); on error st
+// is closed.
+func (s *statementImpl) startQuery(ctx context.Context, st *ttc.Statement, binds []ttc.BindColumn, numRows int) (*streamingRecordReader, error) {
 	reader := newStreamingRecordReader(ctx, s.conn, st)
 	if err := st.Execute(ctx, ttc.ExecuteOptions{
 		Binds:        binds,
@@ -511,16 +577,70 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, i
 		Sink:         reader.sink,
 	}); err != nil {
 		reader.abandon()
-		return nil, -1, fromTTCError(err)
+		return nil, fromTTCError(err)
 	}
 	if err := reader.start(); err != nil {
 		reader.abandon()
+		return nil, err
+	}
+	return reader, nil
+}
+
+// executeQueryPerRow runs the query once for every parameter row and returns
+// all result batches, in parameter order, from one reader.
+func (s *statementImpl) executeQueryPerRow(ctx context.Context, params []arrow.Record) (array.RecordReader, int64, error) {
+	var schema *arrow.Schema
+	var results []arrow.Record
+	release := func() {
+		for _, r := range results {
+			r.Release()
+		}
+	}
+	for _, rec := range params {
+		for row := int64(0); row < rec.NumRows(); row++ {
+			slice := rec.NewSlice(row, row+1)
+			st := s.conn.conn.Prepare(rewriteQmark(s.sql))
+			binds, n, err := s.bindColumns(st, slice)
+			if err != nil {
+				st.Close()
+				slice.Release()
+				release()
+				return nil, -1, err
+			}
+			reader, err := s.startQuery(ctx, st, binds, n)
+			if err != nil {
+				slice.Release()
+				release()
+				return nil, -1, err
+			}
+			if schema == nil {
+				schema = reader.Schema()
+			} else if !schema.Equal(reader.Schema()) {
+				reader.Release()
+				slice.Release()
+				release()
+				return nil, -1, errStatus(adbc.StatusInvalidState, "query result schema changed between parameter rows: %s vs %s", schema, reader.Schema())
+			}
+			for reader.Next() {
+				batch := reader.RecordBatch()
+				batch.Retain()
+				results = append(results, batch)
+			}
+			err = reader.Err()
+			reader.Release()
+			slice.Release()
+			if err != nil {
+				release()
+				return nil, -1, err
+			}
+		}
+	}
+	rr, err := array.NewRecordReader(schema, results)
+	release()
+	if err != nil {
 		return nil, -1, err
 	}
-	// The statement is now owned by the reader until it is released; the
-	// next ExecuteQuery on this ADBC statement re-prepares.
-	s.prepared = nil
-	return reader, -1, nil
+	return rr, -1, nil
 }
 
 func (s *statementImpl) ExecuteUpdate(ctx context.Context) (int64, error) {
@@ -534,24 +654,32 @@ func (s *statementImpl) ExecuteUpdate(ctx context.Context) (int64, error) {
 		return -1, errStatus(adbc.StatusInvalidState, "ExecuteUpdate: no SQL set")
 	}
 	st := s.statement()
-	binds, numRows, err := s.bindColumns(st)
+	defer s.clearBound()
+	isQuery := st.IsQuery()
+	var rows int64
+	_, err := s.forEachBindBatch(st, func(binds []ttc.BindColumn, numRows int) error {
+		if isQuery {
+			// Run it and discard rows.
+			return fromTTCError(st.Execute(ctx, ttc.ExecuteOptions{Binds: binds, NumRows: numRows, AutoCommit: s.conn.autoCommit, PrefetchRows: 1}))
+		}
+		if err := st.Execute(ctx, ttc.ExecuteOptions{Binds: binds, NumRows: numRows, AutoCommit: s.conn.autoCommit}); err != nil {
+			return fromTTCError(err)
+		}
+		rows += int64(st.RowCount())
+		return nil
+	})
+	if isQuery {
+		st.Close()
+		s.prepared = nil
+		if err != nil {
+			return -1, err
+		}
+		return -1, nil
+	}
 	if err != nil {
 		return -1, err
 	}
-	defer s.clearBound()
-	if st.IsQuery() {
-		// Run it and discard rows.
-		if err := st.Execute(ctx, ttc.ExecuteOptions{Binds: binds, NumRows: numRows, AutoCommit: s.conn.autoCommit, PrefetchRows: 1}); err != nil {
-			return -1, fromTTCError(err)
-		}
-		st.Close()
-		s.prepared = nil
-		return -1, nil
-	}
-	if err := st.Execute(ctx, ttc.ExecuteOptions{Binds: binds, NumRows: numRows, AutoCommit: s.conn.autoCommit}); err != nil {
-		return -1, fromTTCError(err)
-	}
-	return int64(st.RowCount()), nil
+	return rows, nil
 }
 
 func (s *statementImpl) ExecuteSchema(ctx context.Context) (*arrow.Schema, error) {
@@ -614,27 +742,10 @@ func (s *statementImpl) ExecutePartitions(context.Context) (*arrow.Schema, adbc.
 	return nil, adbc.Partitions{}, -1, errStatus(adbc.StatusNotImplemented, "ExecutePartitions")
 }
 
-// bindColumns converts the bound record (or the first batch of a bound
-// stream) into TTC bind columns. For non-query statements every row of
-// the record is executed (array DML).
-func (s *statementImpl) bindColumns(st *ttc.Statement) ([]ttc.BindColumn, int, error) {
-	var rec arrow.Record
-	if s.bound != nil {
-		rec = s.bound
-	} else if s.boundStream != nil {
-		if !s.boundStream.Next() {
-			if err := s.boundStream.Err(); err != nil {
-				return nil, 0, errStatus(adbc.StatusIO, "bound stream: %v", err)
-			}
-			return nil, 0, errStatus(adbc.StatusInvalidArgument, "bound stream produced no batches")
-		}
-		rec = s.boundStream.Record()
-	} else {
-		if len(st.BindNames()) > 0 {
-			return nil, 0, errStatus(adbc.StatusInvalidArgument, "statement has %d bind variables but no parameters were bound", len(st.BindNames()))
-		}
-		return nil, 1, nil
-	}
+// bindColumns converts one record of bound parameters into TTC bind
+// columns. For non-query statements every row of the record is executed
+// (array DML).
+func (s *statementImpl) bindColumns(st *ttc.Statement, rec arrow.Record) ([]ttc.BindColumn, int, error) {
 	if int(rec.NumCols()) != len(st.BindNames()) {
 		return nil, 0, errStatus(adbc.StatusInvalidArgument, "statement has %d bind variables but %d parameter columns were bound", len(st.BindNames()), rec.NumCols())
 	}
@@ -643,11 +754,88 @@ func (s *statementImpl) bindColumns(st *ttc.Statement) ([]ttc.BindColumn, int, e
 		return nil, 0, err
 	}
 	s.bindSchema = rec.Schema()
-	n := int(rec.NumRows())
-	if n == 0 {
-		n = 1
+	return binds, int(rec.NumRows()), nil
+}
+
+// forEachBindBatch calls fn once for every non-empty batch of bound
+// parameters: the bound record, or each batch of a bound stream (all of
+// them, not only the first). With nothing bound it calls fn once without
+// binds. It returns how many times fn was called; a bound record or stream
+// with no rows calls it zero times.
+func (s *statementImpl) forEachBindBatch(st *ttc.Statement, fn func(binds []ttc.BindColumn, numRows int) error) (int, error) {
+	switch {
+	case s.bound != nil:
+		if s.bound.NumRows() == 0 {
+			return 0, nil
+		}
+		binds, n, err := s.bindColumns(st, s.bound)
+		if err != nil {
+			return 0, err
+		}
+		return 1, fn(binds, n)
+	case s.boundStream != nil:
+		executions := 0
+		for s.boundStream.Next() {
+			rec := s.boundStream.Record()
+			if rec.NumRows() == 0 {
+				continue
+			}
+			binds, n, err := s.bindColumns(st, rec)
+			if err != nil {
+				return executions, err
+			}
+			executions++
+			if err := fn(binds, n); err != nil {
+				return executions, err
+			}
+		}
+		if err := s.boundStream.Err(); err != nil {
+			return executions, errStatus(adbc.StatusIO, "bound stream: %v", err)
+		}
+		return executions, nil
+	default:
+		if len(st.BindNames()) > 0 {
+			return 0, errStatus(adbc.StatusInvalidArgument, "statement has %d bind variables but no parameters were bound", len(st.BindNames()))
+		}
+		return 1, fn(nil, 1)
 	}
-	return binds, n, nil
+}
+
+// queryParams returns the non-empty batches of parameters bound for a query
+// (retained; the caller releases them). Nothing bound returns none.
+func (s *statementImpl) queryParams(st *ttc.Statement) ([]arrow.Record, error) {
+	var out []arrow.Record
+	switch {
+	case s.bound != nil:
+		if s.bound.NumRows() == 0 {
+			return nil, errStatus(adbc.StatusInvalidArgument, "no parameter rows were bound")
+		}
+		s.bound.Retain()
+		out = append(out, s.bound)
+	case s.boundStream != nil:
+		for s.boundStream.Next() {
+			rec := s.boundStream.Record()
+			if rec.NumRows() == 0 {
+				continue
+			}
+			rec.Retain()
+			out = append(out, rec)
+		}
+		if err := s.boundStream.Err(); err != nil {
+			for _, rec := range out {
+				rec.Release()
+			}
+			return nil, errStatus(adbc.StatusIO, "bound stream: %v", err)
+		}
+		if len(out) == 0 {
+			return nil, errStatus(adbc.StatusInvalidArgument, "bound stream produced no parameter rows")
+		}
+	default:
+		if len(st.BindNames()) > 0 {
+			return nil, errStatus(adbc.StatusInvalidArgument, "statement has %d bind variables but no parameters were bound", len(st.BindNames()))
+		}
+	}
+	return out, nil
 }
 
 // rewriteQmark converts JDBC/DBAPI-style "?" placeholders to Oracle
