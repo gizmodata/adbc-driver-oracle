@@ -31,7 +31,7 @@ def test_install_manifest_explicit_dir(tmp_path):
     assert target == tmp_path / "oracle.toml"
     text = target.read_text(encoding="utf-8")
     assert "manifest_version = 1" in text
-    assert "entrypoint = 'OracleDriverInit'" in text
+    assert "entrypoint = 'AdbcDriverOracleInit'" in text
     # Driver.shared must be an absolute path to an existing library —
     # relative paths resolve against CWD and are rejected by the
     # driver manager by default.

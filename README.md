@@ -24,8 +24,15 @@ Apache Arrow `RecordBatch`es straight from the result set — the way
 Distributed as:
 - a Go module — `github.com/gizmodata/adbc-driver-oracle`
 - a `pip install adbc-driver-oracle` wheel for Python (macOS / Linux / Windows × x64 / arm64)
-- a c-shared library (`libadbc_driver_oracle.{so,dylib,dll}`) attached to each
-  GitHub Release for C / C++ / Rust / R / driver-manifest consumers
+- a c-shared library for C / C++ / Rust / R / driver-manifest consumers, attached
+  to each GitHub Release as `libadbc_driver_oracle-<os>-<arch>.tar.gz` (the library as
+  `libadbc_driver_oracle.{so,dylib,dll}`, plus `LICENSE` and `NOTICE`; `SHA256SUMS`
+  covers the archives). It follows the
+  [ADBC shared-library requirements](https://adbc-drivers.org/building-drivers/shared-library-requirements.html):
+  its entrypoint is `AdbcDriverOracleInit`, the name the driver manager derives from
+  the file name (`AdbcDriverInit` works too), and it exports nothing else outside the
+  `Adbc*` API except `OracleDriverInit`, the entrypoint releases up to 1.0.3
+  documented, kept as a deprecated alias until 2.0.0
 
 > **Status:** Stable (1.0.0). Tested against Oracle Database 23ai Free;
 > the wire protocol targets Oracle 12.1 and later (the same range as
@@ -109,7 +116,7 @@ import adbc_driver_oracle
 
 with dbapi.connect(
     driver=adbc_driver_oracle._driver_path(),
-    entrypoint="OracleDriverInit",
+    entrypoint="AdbcDriverOracleInit",
     db_kwargs={"uri": "oracle://scott:tiger@localhost:1521/FREEPDB1"},
 ) as conn, conn.cursor() as cur:
     cur.execute("SELECT 42 AS answer FROM DUAL")

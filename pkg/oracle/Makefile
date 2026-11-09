@@ -21,9 +21,10 @@ LIB := libadbc_driver_oracle.$(SUFFIX)
 .PHONY: all clean $(LIB)
 all: $(LIB)
 
+# scripts/build_lib.sh limits the library's exports to the ADBC entrypoints
+# (the export lists are exports_*.{map,txt,def} in this directory).
 $(LIB):
-	cd ../.. && go build -buildmode=c-shared -tags driverlib \
-		-o pkg/oracle/$(LIB) ./pkg/oracle
+	../../scripts/build_lib.sh pkg/oracle/$(LIB)
 
 clean:
 	rm -f $(LIB) libadbc_driver_oracle.h

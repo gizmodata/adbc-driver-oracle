@@ -239,7 +239,7 @@ def connect(
         ``username`` / ``password`` (instead of embedding them in the URI),
         ``adbc.oracle.tls`` to enable TLS.
     """
-    kwargs = {"driver": _driver_path(), "entrypoint": "OracleDriverInit", "uri": uri}
+    kwargs = {"driver": _driver_path(), "entrypoint": "AdbcDriverOracleInit", "uri": uri}
     if db_kwargs:
         # dict.update is a C-extension method whose kwargs become new
         # dict keys, not a merge target — so the merge arg stays positional.

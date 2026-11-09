@@ -99,7 +99,7 @@ def engine(request, oracle_server, driver_path):
                 TYPE adbc,
                 SCOPE {lit(uri)},
                 driver {lit(library)},
-                entrypoint 'OracleDriverInit',
+                entrypoint 'AdbcDriverOracleInit',
                 uri {lit(uri)},
                 username {lit(oracle_server.username)},
                 password {lit(oracle_server.password)}

@@ -6,6 +6,36 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-11-09
+
+The c-shared library now meets the
+[ADBC shared-library requirements](https://adbc-drivers.org/building-drivers/shared-library-requirements.html).
+
+### Fixed
+
+- **The library exported about 70 to 260 names outside the ADBC API**: the Go wrapper's
+  functions (`OracleDatabaseNew`, `OracleStatementExecuteQuery`, ...) and cgo's glue
+  (`_cgo_*`, `crosscall2`). Asking the driver manager for one of them as an entrypoint loaded it
+  and crashed the process. The library now exports only `Adbc*` names, plus the deprecated
+  `OracleDriverInit` alias (below). Linux, macOS and Windows builds use export lists
+  (`pkg/oracle/exports_*`), and CI checks every library it builds with
+  `go run ./scripts/checkexports` (on Windows arm64 too).
+- **The GitHub Release's libraries had the wrong file names for the driver manager.** It derives
+  the entrypoint from the file name, so `libadbc_driver_oracle-linux-amd64.so` made it look for
+  `AdbcDriverOracleLinuxAmd64Init` before falling back to `AdbcDriverInit`. Each platform is now an
+  archive, `libadbc_driver_oracle-<os>-<arch>.tar.gz`, holding `libadbc_driver_oracle.<ext>`
+  (entrypoint `AdbcDriverOracleInit`) with `LICENSE` and `NOTICE`; each has a `.sha256`, and
+  `SHA256SUMS` covers the archives. The wheels already bundled the library under the right name.
+
+### Changed
+
+- The entrypoint is `AdbcDriverOracleInit`: the Python package, the driver manifest that
+  `install-manifest` writes, the README and the tests use it. **`OracleDriverInit` is deprecated**;
+  it still works, so code and manifests written for earlier releases keep loading, and it will be
+  removed in 2.0.0. A test loads the library through each entrypoint.
+- `scripts/build_lib.sh` builds the library (`make -C pkg/oracle` calls it); a plain
+  `go build -buildmode=c-shared` still works but exports everything.
+
 ## [1.0.3] - 2026-11-09
 
 The driver now passes the [adbc-drivers.org driver validation suite](https://github.com/adbc-drivers/validation)

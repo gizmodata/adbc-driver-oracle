@@ -1,0 +1,7 @@
+{
+  global:
+    Adbc*;
+    OracleDriverInit;
+  local:
+    *;
+};
