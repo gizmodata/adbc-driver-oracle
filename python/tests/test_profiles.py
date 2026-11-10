@@ -69,12 +69,12 @@ driver = "oracle"
 [Options]
 uri = "{oracle_server.credential_free_uri}"
 username = "{oracle_server.username}"
-password = "{{{{ env_var(ORACLE_IT_PASSWORD) }}}}"
+password = "{{{{ env_var(ADBC_ORACLE_TEST_PROFILE_PASSWORD) }}}}"
 ''',
         encoding="utf-8",
     )
     monkeypatch.setenv("ADBC_PROFILE_PATH", str(profiles))
-    monkeypatch.setenv("ORACLE_IT_PASSWORD", oracle_server.password)
+    monkeypatch.setenv("ADBC_ORACLE_TEST_PROFILE_PASSWORD", oracle_server.password)
 
     with dbapi.connect(profile="oracle_it") as conn, conn.cursor() as cur:
         cur.execute("SELECT 'profile' AS via FROM DUAL")

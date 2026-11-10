@@ -15,7 +15,8 @@ on:
 #                                └─> github-release
 #
 # - go-test runs `go vet` + `go test -race ./...` on linux + macOS (on linux also
-#   the 10g/11g/12c password-verifier tests against an Oracle 21c service)
+#   the 10g/11g/12c password-verifier tests against an Oracle 21c service, and the
+#   NNE tests against servers that require and reject Native Network Encryption)
 # - test runs the Python unit + integration suite (6 Pythons × 3 OS)
 # - validation runs the adbc-drivers.org driver validation suite against
 #   Oracle 23ai (validation/README.md); it fails, never skips, without a server
@@ -29,8 +30,77 @@ concurrency:
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
+  # Decides whether this run is about code (code=true) or documentation only (code=false). Every
+  # other job needs it and runs only when code=true; "CI result" at the end is the one required
+  # check. code=false only when every changed file is *.md, docs/**, LICENSE, NOTICE or
+  # .github/ISSUE_TEMPLATE/** (workflow files are code). Tags, workflow_dispatch, schedule and any
+  # other event (including release.yml calling this workflow, which carries the caller's tag push
+  # or dispatch) always test everything.
+  changes:
+    name: Changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Code or documentation only?
+        id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          code=true
+          range=
+          case "$EVENT:$REF" in
+            *:refs/tags/*) reason="a tag ($REF)" ;;
+            pull_request:*) range="$PR_BASE...$SHA" ;;
+            push:refs/heads/*)
+              if [ -z "$BEFORE" ] || [ -z "${BEFORE//0/}" ]; then
+                reason="a new branch"
+              elif ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+                reason="the previous head $BEFORE is not in the history (force push)"
+              else
+                range="$BEFORE..$SHA"
+              fi
+              ;;
+            *) reason="a $EVENT run on $REF" ;;
+          esac
+          if [ -n "$range" ]; then
+            # --no-renames: a rename lists both paths, so moving code into docs/ is still code.
+            files=$(git diff --no-renames --name-only "$range")
+            count=0
+            code=false
+            while IFS= read -r f; do
+              [ -n "$f" ] || continue
+              count=$((count + 1))
+              case "$f" in
+                *.md | docs/* | LICENSE | NOTICE | .github/ISSUE_TEMPLATE/*) echo "docs: $f" ;;
+                *) echo "code: $f"; code=true ;;
+              esac
+            done <<< "$files"
+            if [ "$count" -eq 0 ]; then
+              code=true
+              reason="no changed files in $range"
+            elif [ "$code" = true ]; then
+              reason="code changed in $range"
+            else
+              reason="only documentation changed in $range ($count files)"
+            fi
+          fi
+          echo "code=$code ($reason)"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "**Changes:** code=\`$code\` ($reason)" >> "$GITHUB_STEP_SUMMARY"
+
   go-test:
     name: Go tests
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -65,6 +135,34 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 30
+      oracle_nne:
+        # Native Network Encryption: scripts/setup_nne_server.sh below makes this server require
+        # NNE and the next one reject it (internal/ttc/live_nne_test.go).
+        image: ${{ startsWith(matrix.os, 'ubuntu') && 'gvenzl/oracle-free:23-slim-faststart' || '' }}
+        env:
+          ORACLE_PASSWORD: tiger
+          APP_USER: scott
+          APP_USER_PASSWORD: tiger
+        ports:
+          - 1523:1521
+        options: >-
+          --health-cmd healthcheck.sh
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 30
+      oracle_nne_rejected:
+        image: ${{ startsWith(matrix.os, 'ubuntu') && 'gvenzl/oracle-free:23-slim-faststart' || '' }}
+        env:
+          ORACLE_PASSWORD: tiger
+          APP_USER: scott
+          APP_USER_PASSWORD: tiger
+        ports:
+          - 1524:1521
+        options: >-
+          --health-cmd healthcheck.sh
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 30
     env:
       ADBC_ORACLE_TEST_URI: ${{ startsWith(matrix.os, 'ubuntu') && 'oracle://scott:tiger@localhost:1521/FREEPDB1' || '' }}
       # The full (non-slim) image includes Oracle Spatial, needed for the
@@ -77,6 +175,10 @@ jobs:
       ADBC_ORACLE_TEST_11G_URI: ${{ startsWith(matrix.os, 'ubuntu') && 'oracle://adbc_test_11g:Tiger11g@127.0.0.1:1522/XEPDB1' || '' }}
       ADBC_ORACLE_TEST_12C_URI: ${{ startsWith(matrix.os, 'ubuntu') && 'oracle://adbc_test_12c:Tiger12c@127.0.0.1:1522/XEPDB1' || '' }}
       ADBC_ORACLE_TEST_VERIFIERS_REQUIRED: ${{ startsWith(matrix.os, 'ubuntu') && 'true' || '' }}
+      # The NNE-required and NNE-rejecting servers. internal/ttc's live tests fail, never skip,
+      # when their URI is set and the server doesn't answer (on macOS these are empty: skip).
+      ADBC_ORACLE_NNE_URI: ${{ startsWith(matrix.os, 'ubuntu') && 'oracle://scott:tiger@127.0.0.1:1523/FREEPDB1' || '' }}
+      ADBC_ORACLE_NNE_REJECTED_URI: ${{ startsWith(matrix.os, 'ubuntu') && 'oracle://scott:tiger@127.0.0.1:1524/FREEPDB1' || '' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -89,14 +191,39 @@ jobs:
         if: startsWith(matrix.os, 'ubuntu')
         run: scripts/setup_verifier_users.sh "${{ job.services.oracle_xe21.id }}" XEPDB1
 
+      - name: Make one server require NNE and one reject it (Linux)
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          scripts/setup_nne_server.sh "${{ job.services.oracle_nne.id }}" REQUIRED
+          scripts/setup_nne_server.sh "${{ job.services.oracle_nne_rejected.id }}" REJECTED
+
       - name: go vet
         run: go vet ./...
 
       - name: go test
-        run: go test -race -timeout 5m ./...
+        # -v, so the log names every test and the next step can check that none was skipped.
+        run: |
+          set -o pipefail
+          go test -race -timeout 5m -v ./... 2>&1 | tee go-test.log
+
+      - name: The live tests ran, none skipped (Linux)
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          if grep -E -- '--- SKIP: TestLive' go-test.log; then
+            echo "::error::live tests were skipped although their servers are configured"
+            exit 1
+          fi
+          for t in TestLiveConnectAndQuery TestLiveNNE TestLiveNNEClientDriven TestLiveNNERejectedServer; do
+            if ! grep -E -- "--- PASS: $t " go-test.log; then
+              echo "::error::$t did not pass"
+              exit 1
+            fi
+          done
 
   test:
     name: Python tests
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
     # Only the Linux legs get a live Oracle Database (GitHub Actions
     # service containers are Linux-only); macOS / Windows run the unit
@@ -234,6 +361,8 @@ jobs:
 
   validation:
     name: ADBC validation suite
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     services:
       oracle:
@@ -294,7 +423,8 @@ jobs:
     # Runs on every PR / branch / tag push; only publish + release jobs
     # are tag-gated.
     name: Wheel ${{ matrix.os }} ${{ matrix.arch }}
-    needs: [go-test, test, validation]
+    needs: [changes, go-test, test, validation]
+    if: needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.runner }}
     services:
       oracle:
@@ -545,7 +675,8 @@ jobs:
     # the database servers this driver exists for. Loading the library is the portability check
     # (dlopen fails on a missing GLIBC_x.y symbol version); a refused connection proves it loaded.
     name: Wheel on oracle linux 8 (${{ matrix.arch }})
-    needs: wheels
+    needs: [changes, wheels]
+    if: needs.changes.outputs.code == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -558,7 +689,16 @@ jobs:
     container: oraclelinux:8
     steps:
       - name: Install Python 3.12
-        run: dnf install -y -q python3.12 python3.12-pip
+        # A mirror can serve a broken repomd.xml ("repomd.xml parser error"), and dnf's own
+        # retries (--setopt=retries) cover failed downloads, not a bad file: it fetches it once
+        # and gives up. So retry the whole install with fresh metadata.
+        run: |
+          for i in 1 2 3 4 5; do
+            if dnf install -y -q python3.12 python3.12-pip; then break; fi
+            if [ "$i" -eq 5 ]; then echo "::error::dnf install failed 5 times"; exit 1; fi
+            dnf clean metadata || true
+            sleep $((i * 15))
+          done
 
       - uses: actions/download-artifact@v8
         with:
@@ -584,8 +724,8 @@ jobs:
 
   publish:
     name: Publish to PyPI
-    needs: [wheels, oracle-linux-8]
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [changes, wheels, oracle-linux-8]
+    if: startsWith(github.ref, 'refs/tags/v') && needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -612,8 +752,8 @@ jobs:
 
   github-release:
     name: Attach c-shared libraries to GitHub Release
-    needs: [wheels, oracle-linux-8]
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [changes, wheels, oracle-linux-8]
+    if: startsWith(github.ref, 'refs/tags/v') && needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -673,8 +813,8 @@ jobs:
 
   pkgsite-warm:
     name: Warm pkg.go.dev cache
-    needs: [publish, github-release]
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [changes, publish, github-release]
+    if: startsWith(github.ref, 'refs/tags/v') && needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Trigger pkg.go.dev fetch
@@ -690,3 +830,43 @@ jobs:
             "https://pkg.go.dev/fetch/github.com/gizmodata/adbc-driver-oracle@${ref}" \
             -o /dev/null -w "pkg.go.dev fetch (${ref}): HTTP %{http_code} in %{time_total}s\n" \
             || true
+
+  # The one required status check. It fails when any job failed or was cancelled, and when the
+  # change is code but a job that must run was skipped; for a documentation-only change the
+  # skipped jobs pass. Jobs in OPTIONAL skip by their own conditions (tag-only publishing).
+  ci-result:
+    name: CI result
+    if: always()
+    needs: [changes, go-test, test, validation, wheels, oracle-linux-8, publish, github-release, pkgsite-warm]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job passed, or was skipped for a documentation-only change
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          CODE: ${{ needs.changes.outputs.code }}
+          OPTIONAL: "publish github-release pkgsite-warm"
+        run: |
+          set -euo pipefail
+          changes=$(jq -r '.changes.result' <<< "$NEEDS")
+          if [ "$changes" != success ] || { [ "$CODE" != true ] && [ "$CODE" != false ]; }; then
+            echo "::error::the Changes job didn't decide (result: $changes, code: '$CODE')"
+            exit 1
+          fi
+          failed=0
+          while read -r job result; do
+            optional=false
+            for o in $OPTIONAL; do if [ "$o" = "$job" ]; then optional=true; fi; done
+            case "$result" in
+              success) echo "ok       $job" ;;
+              skipped)
+                if [ "$CODE" = true ] && [ "$optional" = false ]; then
+                  echo "::error::$job was skipped, but this change is code: it must run"
+                  failed=1
+                else
+                  echo "skipped  $job"
+                fi
+                ;;
+              *) echo "::error::$job: $result"; failed=1 ;;
+            esac
+          done < <(jq -r 'to_entries[] | "\(.key) \(.value.result)"' <<< "$NEEDS")
+          exit "$failed"
