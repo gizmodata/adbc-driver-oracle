@@ -6,6 +6,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-11-09
+
+### Changed
+
+- **README**: the PyPI page shows the ADBC conformance badge: the adbc-drivers.org validation suite runs in CI, and every release waits for it.
+
+No code changes.
+
 ## [1.0.5] - 2026-11-09
 
 ### Added
