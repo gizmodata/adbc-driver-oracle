@@ -11,6 +11,7 @@
 [![Supported Python Versions](https://img.shields.io/pypi/pyversions/adbc-driver-oracle)](https://pypi.org/project/adbc-driver-oracle/)
 [![PyPI version](https://badge.fury.io/py/adbc-driver-oracle.svg)](https://badge.fury.io/py/adbc-driver-oracle)
 [![PyPI Downloads](https://img.shields.io/pepy/dt/adbc-driver-oracle.svg)](https://pypi.org/project/adbc-driver-oracle/)
+[![ADBC conformance](https://img.shields.io/badge/ADBC-conformance%20suite%20passing-2ea44f.svg)](https://github.com/gizmodata/adbc-driver-oracle/blob/main/validation/README.md)
 [![License](https://img.shields.io/github/license/gizmodata/adbc-driver-oracle)](LICENSE)
 [![Hardcharger](https://img.shields.io/badge/works%20with-Hardcharger%E2%84%A2-f15a24.svg)](https://gizmodata.com/hardcharger)
 
