@@ -82,8 +82,15 @@ Hardcharger and in an embedded DuckDB; on DuckDB 2.0+ (every Hardcharger) the
 extension installs from the Query.Farm repository, on 1.x from community.
 
 Go-level integration tests: `go test ./...` — `internal/ttc` has raw
-wire-protocol tests, `driver/oracle` has ADBC-level ones; both skip
-without a listener on localhost:1521.
+wire-protocol tests, `driver/oracle` has ADBC-level ones; both read
+`ADBC_ORACLE_TEST_URI` and skip without a listener on localhost:1521 when it
+is unset (`internal/ttc` fails instead when it is set and nothing answers;
+`ADBC_ORACLE_TEST_TRACE=1` logs its wire trace).
+
+Test settings use `ADBC_ORACLE_*` names only (`ADBC_ORACLE_TEST_*` for new
+ones), never a bare `ORACLE_*`: a developer's own Oracle environment must
+never reach a test. (`ORACLE_PASSWORD` above is the gvenzl image's own
+setting.)
 
 ## How the wire layer is put together
 
@@ -151,14 +158,14 @@ without a listener on localhost:1521.
   a raw TCP urgent byte bypasses the encrypted channel and some servers
   reset/hang on it. Cancellation over NNE uses in-band interrupt markers.
   Local NNE containers: `oracle-nne` (:1523, sqlnet REQUIRED) and
-  `oracle-nne-rejected` (:1524, sqlnet REJECTED) — same gvenzl image with
-  a `sqlnet.ora` appended via a `/container-entrypoint-initdb.d` script
-  (`SQLNET.ENCRYPTION_SERVER = REQUIRED|REJECTED`,
-  `SQLNET.CRYPTO_CHECKSUM_SERVER = ...`). Tests: `internal/ttc`
-  `TestLiveNNE*` (env `ORACLE_NNE_HOST/PORT`, `ORACLE_NNE_REJECTED_HOST/
-  PORT`), python `test_nne.py` (`ADBC_ORACLE_NNE_URI`,
-  `ADBC_ORACLE_NNE_REJECTED_URI`; the wire-bytes proxy test runs against
-  the standard container).
+  `oracle-nne-rejected` (:1524, sqlnet REJECTED) — same gvenzl image,
+  set up by `scripts/setup_nne_server.sh <container> REQUIRED|REJECTED`
+  (`SQLNET.ENCRYPTION_SERVER` / `SQLNET.CRYPTO_CHECKSUM_SERVER` in its
+  `sqlnet.ora`; CI's Linux go-test leg runs both as services). Tests:
+  `internal/ttc` `TestLiveNNE*` (`ADBC_ORACLE_NNE_URI`,
+  `ADBC_ORACLE_NNE_REJECTED_URI`; they fail when set and unreachable),
+  python `test_nne.py` (`ADBC_ORACLE_NNE_URI`; the wire-bytes proxy test
+  runs against the standard container).
 - Object types (`internal/ttc/objtype.go`, `objimage.go`, driver
   `objects.go`): type metadata comes from ALL_TYPES / ALL_TYPE_ATTRS /
   ALL_COLL_TYPES (not dbms_pickler — it needs a REF CURSOR OUT bind),

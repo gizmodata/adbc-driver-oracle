@@ -2,44 +2,18 @@ package ttc
 
 import (
 	"context"
-	"fmt"
-	"net"
-	"os"
-	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gizmodata/adbc-driver-oracle/internal/tns"
 )
 
 func TestLiveNNE(t *testing.T) {
-	host := "localhost"
-	if h := os.Getenv("ORACLE_NNE_HOST"); h != "" {
-		host = h
-	}
-	port := 1523
-	if p := os.Getenv("ORACLE_NNE_PORT"); p != "" {
-		port, _ = strconv.Atoi(p)
-	}
-	// Requires an Oracle whose listener mandates NNE (see the container
-	// recipe in CLAUDE.md); skip when nothing is listening.
-	probe, derr := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", host, port), 2*time.Second)
-	if derr != nil {
-		t.Skipf("no NNE-required Oracle at %s:%d: %v", host, port, derr)
-	}
-	probe.Close()
-	cfg := &Config{
-		Addresses:   []Address{{Host: host, Port: port}},
-		ServiceName: "FREEPDB1",
-		Username:    "scott",
-		Password:    "tiger",
-		FullVersion: 1 << 20,
-		ANO:         &tns.ANOConfig{EncryptionLevel: tns.LevelRequired, ChecksumLevel: tns.LevelRequired},
-	}
-	if os.Getenv("ORACLE_TRACE") != "" {
-		cfg.Trace = func(f string, a ...any) { t.Logf(f, a...) }
-	}
+	// An Oracle whose listener mandates NNE (scripts/setup_nne_server.sh;
+	// CI's oracle_nne service). Skips when nothing listens at the default and
+	// ADBC_ORACLE_NNE_URI is unset.
+	cfg := liveServerConfig(t, "ADBC_ORACLE_NNE_URI", "oracle://scott:tiger@localhost:1523/FREEPDB1")
+	cfg.ANO = &tns.ANOConfig{EncryptionLevel: tns.LevelRequired, ChecksumLevel: tns.LevelRequired}
 	ctx := context.Background()
 	c, err := Dial(ctx, cfg)
 	if err != nil {
@@ -128,32 +102,10 @@ func TestLiveNNEClientDriven(t *testing.T) {
 
 // nneRejectedConfig points at an Oracle whose sqlnet.ora REJECTS NNE
 // (SQLNET.ENCRYPTION_SERVER=REJECTED, CRYPTO_CHECKSUM_SERVER=REJECTED);
-// see CLAUDE.md for the container recipe. Skips when absent.
+// scripts/setup_nne_server.sh makes one; CI runs it as the
+// oracle_nne_rejected service. Skips when absent and unconfigured.
 func nneRejectedConfig(t *testing.T) *Config {
-	host := "localhost"
-	if h := os.Getenv("ORACLE_NNE_REJECTED_HOST"); h != "" {
-		host = h
-	}
-	port := 1524
-	if p := os.Getenv("ORACLE_NNE_REJECTED_PORT"); p != "" {
-		port, _ = strconv.Atoi(p)
-	}
-	probe, derr := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", host, port), 2*time.Second)
-	if derr != nil {
-		t.Skipf("no NNE-rejecting Oracle at %s:%d: %v", host, port, derr)
-	}
-	probe.Close()
-	cfg := &Config{
-		Addresses:   []Address{{Host: host, Port: port}},
-		ServiceName: "FREEPDB1",
-		Username:    "scott",
-		Password:    "tiger",
-		FullVersion: 1 << 20,
-	}
-	if os.Getenv("ORACLE_TRACE") != "" {
-		cfg.Trace = func(f string, a ...any) { t.Logf(f, a...) }
-	}
-	return cfg
+	return liveServerConfig(t, "ADBC_ORACLE_NNE_REJECTED_URI", "oracle://scott:tiger@localhost:1524/FREEPDB1")
 }
 
 // TestLiveNNERejectedServer pins the fail-closed contract: against a

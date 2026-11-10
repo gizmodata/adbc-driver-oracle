@@ -6,6 +6,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **CI**: a change that touches only documentation (`*.md`, `docs/`, `LICENSE`, `NOTICE`) skips the build and test jobs, and one job, `CI result`, reports on every run and is the only required check. The glibc-2.28 install check retries `dnf install` with fresh metadata, so a mirror serving a broken `repomd.xml` can't fail a build.
+- **Tests** read only `ADBC_ORACLE_*` settings, so a developer's own Oracle environment can't reach them: `internal/ttc`'s live tests take `ADBC_ORACLE_TEST_URI`, `ADBC_ORACLE_NNE_URI`, `ADBC_ORACLE_NNE_REJECTED_URI` and `ADBC_ORACLE_TEST_TRACE` (were `ORACLE_TEST_HOST`/`_PORT`, `ORACLE_NNE_*`, `ORACLE_TRACE`), fail rather than skip when one is set and its server doesn't answer, and CI now runs the Native Network Encryption tests against servers that require and reject it.
+
 ## [1.0.6] - 2026-11-09
 
 ### Changed

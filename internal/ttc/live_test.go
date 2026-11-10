@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -70,28 +71,55 @@ func hexOf(b []byte) string {
 	return string(out)
 }
 
+// liveConfig is the standard test server: ADBC_ORACLE_TEST_URI, the same
+// variable the driver and Python suites read (default: the gvenzl/oracle-free
+// container on localhost:1521).
 func liveConfig(t *testing.T) *Config {
-	host := os.Getenv("ORACLE_TEST_HOST")
-	if host == "" {
-		host = "localhost"
+	return liveServerConfig(t, "ADBC_ORACLE_TEST_URI", "oracle://scott:tiger@localhost:1521/FREEPDB1")
+}
+
+// liveServerConfig returns a Config for the server in the environment variable
+// env, an oracle://user:password@host:port/service URI. Only ADBC_ORACLE_*
+// variables are read, so a developer's own ORACLE_* environment never reaches a
+// test. When env is set, an unreachable server fails the test (CI sets it, and a
+// suite that gates releases must not pass by skipping); when it is unset or empty,
+// the test uses defaultURI and skips if nothing listens there.
+func liveServerConfig(t *testing.T, env, defaultURI string) *Config {
+	t.Helper()
+	raw, required := os.Getenv(env), true
+	if raw == "" {
+		raw, required = defaultURI, false
 	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "oracle" || u.Hostname() == "" || u.User == nil {
+		// The value holds a password: never print it.
+		t.Fatalf("%s is not an oracle://user:password@host:port/service URI", env)
+	}
+	host := u.Hostname()
 	port := 1521
-	if p := os.Getenv("ORACLE_TEST_PORT"); p != "" {
-		port, _ = strconv.Atoi(p)
+	if p := u.Port(); p != "" {
+		if port, err = strconv.Atoi(p); err != nil {
+			t.Fatalf("%s: bad port %q", env, p)
+		}
 	}
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", host, port), 2*time.Second)
+	password, _ := u.User.Password()
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
+	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
 	if err != nil {
-		t.Skipf("no Oracle listener at %s:%d: %v", host, port, err)
+		if required {
+			t.Fatalf("%s is set, but no Oracle listens at %s: %v", env, addr, err)
+		}
+		t.Skipf("no Oracle listener at %s (set %s to require one): %v", addr, env, err)
 	}
 	conn.Close()
 	cfg := &Config{
 		Addresses:   []Address{{Host: host, Port: port}},
-		ServiceName: "FREEPDB1",
-		Username:    "scott",
-		Password:    "tiger",
+		ServiceName: strings.TrimPrefix(u.Path, "/"),
+		Username:    u.User.Username(),
+		Password:    password,
 		FullVersion: 1 << 20,
 	}
-	if os.Getenv("ORACLE_TRACE") != "" {
+	if os.Getenv("ADBC_ORACLE_TEST_TRACE") != "" {
 		cfg.Trace = func(format string, args ...any) { t.Logf(format, args...) }
 	}
 	return cfg
