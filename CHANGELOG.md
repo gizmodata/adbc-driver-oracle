@@ -8,6 +8,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **CI**: the Python integration tests can no longer pass by skipping on Linux. They skip when nothing listens at `ADBC_ORACLE_TEST_URI`'s host and port, so a dead Oracle service container left the Linux legs green with the integration suite unrun. With `ADBC_ORACLE_TEST_REQUIRE_SERVER=1` (set on CI's Linux legs) an unreachable server fails them instead; macOS and Windows, which have no Oracle service, still skip.
 - **CI**: a change that touches only documentation (`*.md`, `docs/`, `LICENSE`, `NOTICE`) skips the build and test jobs, and one job, `CI result`, reports on every run and is the only required check. The glibc-2.28 install check retries `dnf install` with fresh metadata, so a mirror serving a broken `repomd.xml` can't fail a build.
 - **Tests** read only `ADBC_ORACLE_*` settings, so a developer's own Oracle environment can't reach them: `internal/ttc`'s live tests take `ADBC_ORACLE_TEST_URI`, `ADBC_ORACLE_NNE_URI`, `ADBC_ORACLE_NNE_REJECTED_URI` and `ADBC_ORACLE_TEST_TRACE` (were `ORACLE_TEST_HOST`/`_PORT`, `ORACLE_NNE_*`, `ORACLE_TRACE`), fail rather than skip when one is set and its server doesn't answer, and CI now runs the Native Network Encryption tests against servers that require and reject it.
 

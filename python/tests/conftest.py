@@ -5,7 +5,10 @@ Integration tests run against a live Oracle Database named by
 ``ADBC_ORACLE_TEST_URI`` (default: the gvenzl/oracle-free container
 described in CLAUDE.md, ``oracle://scott:tiger@localhost:1521/FREEPDB1``).
 They are auto-skipped when nothing is listening on that host:port, so
-``pytest`` still runs cleanly on machines / CI legs without Oracle.
+``pytest`` still runs cleanly on machines / CI legs without Oracle, unless
+``ADBC_ORACLE_TEST_REQUIRE_SERVER=1`` (CI's Linux legs, which have an Oracle
+service container): then an unreachable server fails them instead, so a dead
+container cannot leave the job green with the integration suite skipped.
 
 The Oracle -> Hardcharger tests additionally need a Hardcharger server
 (https://gizmodata.com/hardcharger): the one named by
@@ -67,7 +70,10 @@ def oracle_server() -> OracleServer:
     host = parsed.hostname or "localhost"
     port = parsed.port or 1521
     if not _reachable(host, port):
-        pytest.skip(reason=f"no Oracle Database listening at {host}:{port}")
+        reason = f"no Oracle Database listening at {host}:{port}"
+        if os.environ.get("ADBC_ORACLE_TEST_REQUIRE_SERVER") == "1":
+            pytest.fail(reason=f"{reason} (ADBC_ORACLE_TEST_REQUIRE_SERVER=1)", pytrace=False)
+        pytest.skip(reason=reason)
     return OracleServer(
         uri=uri,
         host=host,

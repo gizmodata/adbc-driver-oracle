@@ -258,6 +258,9 @@ jobs:
       # The full (non-slim) image includes Oracle Spatial, needed for the
       # SDO_GEOMETRY -> GeoArrow tests.
       ADBC_ORACLE_SPATIAL_URI: ${{ startsWith(matrix.os, 'ubuntu') && 'oracle://scott:tiger@localhost:1521/FREEPDB1' || '' }}
+      # Linux has the Oracle service container: an unreachable server fails the integration
+      # tests there instead of skipping them (python/tests/conftest.py).
+      ADBC_ORACLE_TEST_REQUIRE_SERVER: ${{ startsWith(matrix.os, 'ubuntu') && '1' || '' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -335,8 +338,9 @@ jobs:
       - name: Run Python tests
         # No -m filter: run the unit tests (manifest writer etc.) plus
         # the integration suite against the Oracle service container
-        # (Linux) — integration tests self-skip where no DB is reachable.
-        run: pytest -v
+        # (Linux, where an unreachable server fails them) — elsewhere they
+        # self-skip. -rs lists every skip and its reason in the summary.
+        run: pytest -v -rs
 
       - name: Upload c-shared driver library
         # Only upload once per OS — every python version produces the
