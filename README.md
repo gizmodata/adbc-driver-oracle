@@ -72,6 +72,25 @@ pip install adbc-driver-oracle
 go get github.com/gizmodata/adbc-driver-oracle@latest
 ```
 
+**Any language, through an ADBC driver manager (`driver = "oracle"`):** one line installs the
+shared library and its driver manifest, so the driver manager loads the driver by name:
+no Python, and still no Oracle Client libraries.
+
+```bash
+curl https://install.adbc.gizmodata.com/oracle | sh                 # Linux, macOS
+```
+
+```powershell
+irm https://install.adbc.gizmodata.com/oracle.ps1 | iex             # Windows
+```
+
+The installer checks the download against the release's `SHA256SUMS`. To pin a version
+(`curl https://install.adbc.gizmodata.com/oracle | ADBC_VERSION=<version> sh`), install
+system-wide or into another directory, or uninstall, see
+[gizmodata/adbc-install](https://github.com/gizmodata/adbc-install). If another vendor's
+`oracle` driver manifest is installed, the installer backs it up, replaces it and prints the
+command that restores it; `ADBC_NAME=<other name>` installs side by side instead.
+
 ### 3. Connect and query
 
 ```python
@@ -584,7 +603,8 @@ oracle.connect(
 options in a reusable TOML file instead of code. Profiles resolve the
 driver by *name*, which requires a
 [driver manifest](https://arrow.apache.org/adbc/current/format/driver_manifests.html)
-on the search path. Install ours once per environment:
+on the search path. The [one-line installer](#2-install-the-driver)
+writes it; from Python, install ours once per environment:
 
 ```console
 $ python -m adbc_driver_oracle install-manifest
