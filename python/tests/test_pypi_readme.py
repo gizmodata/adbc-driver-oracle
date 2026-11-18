@@ -18,10 +18,21 @@ import pytest
 
 pytestmark = pytest.mark.integration
 
-README = pathlib.Path(__file__).resolve().parents[1] / "README.md"
-BLOCKS = re.findall(
-    r"```python\n(.*?)```", README.read_text(encoding="utf-8"), flags=re.DOTALL
-)
+
+def _page() -> str:
+    """The PyPI page: python/README.md in a checkout, else the installed package's description
+    (CI's wheel jobs run these tests from a copy, against the installed wheel)."""
+    readme = pathlib.Path(__file__).resolve().parents[1] / "README.md"
+    if readme.is_file():
+        return readme.read_text(encoding="utf-8")
+    from importlib.metadata import metadata
+
+    description = metadata("adbc-driver-oracle").get_payload()
+    assert description, "the installed adbc-driver-oracle has no long description"
+    return description
+
+
+BLOCKS = re.findall(r"```python\n(.*?)```", _page(), flags=re.DOTALL)
 
 
 def _localize(code: str, server) -> str:
