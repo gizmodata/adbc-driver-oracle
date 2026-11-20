@@ -20,15 +20,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   setting and for reading back (`GetOption`), at every level that accepted them: the first use
   of each one in a process prints one line to stderr,
   `[oracle] option "adbc.oracle.batch_size" is deprecated; use "oracle.query.batch_size"`, with
-  the key names only, never the value. When both names are given, the new one wins. The old
-  names will be removed in 2.0.0. In Go they are listed in `oracle.DeprecatedOptions`; the Go
+  the key names only, never the value. Each option is stored under its new name: when one call
+  (the options a database is created with, one `SetOptions`, or a connection's options set
+  before it opens) gives both names, the new one wins; across separate calls the last write
+  wins, whichever name it uses. The old names will be removed in 2.0.0. In Go they are listed in `oracle.DeprecatedOptions`; the Go
   constants keep their names (with `OptionNumberType`, `OptionIntervalType`, `OptionDateType`
   and `OptionConnectTimeoutSeconds` added, and `OptionSessionModule` / `Action` / `ClientInfo` /
   `ClientIdentifier` for the tracing attributes), and the Python enums keep their members, with
   `NUMBER_TYPE`, `INTERVAL_TYPE`, `DATE_TYPE` and `CONNECT_TIMEOUT_SECONDS` added (the old member
   names are aliases) and `ConnectionOptions.NNE_ACTIVE` / `NNE_ALGORITHMS` / `USE_EXTENSION_TYPES`.
-  URI parameters take the last part of the new names too (`?number_type=decimal`,
-  `?connect_timeout_seconds=5`); the old parameter names still work.
+  Every option except `oracle.host` / `oracle.port` (part of the URI itself) is also a URI
+  parameter under the last part of its new name (`?number_type=decimal`, `?skip_verify=false`,
+  `?checksum=required`, `?connect_timeout_seconds=5`); the old parameter names still work, and a
+  URI that gives one setting under two spellings with different values is refused.
 
   | Before 1.1.0 | 1.1.0 |
   |---|---|
@@ -84,11 +88,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `[oracle] ORA-01017: ...`), so code matching them keeps working. An unknown option is
   refused under the key exactly as it was given.
 - `oracle.tls.wallet_password` and `oracle.auth.token` are write-only like `password`:
-  `GetOption` no longer returns them. `GetOption` on a statement reports the
+  `GetOption` no longer returns them, and **`GetOption("uri")` returns the URI with its password
+  and any `password` / `pwd` / `token` / `wallet_password` parameters replaced by `xxxxx`** (it
+  returned the URI as given, password included). `GetOption` on a statement reports the
   `oracle.ingest.*` options (with their defaults when unset). `oracle.connect_timeout_seconds`
-  accepts fractions of a second (`0.5`).
-- The C library's logging switch is `ADBC_DRIVER_ORACLE_LOG_LEVEL` (it read
-  `ADBC_DRIVER_DB2_LOG_LEVEL`), and `warn` selects the warning level.
+  accepts fractions of a second (`0.5`) and is limited to 0 to 24 hours (larger values,
+  `1e10` included, overflowed).
+
 - **README** and the **PyPI page**: a badge says the driver follows the
   [ADBC driver style guide](https://adbc-drivers.org/building-drivers/style-guide.html). The
   PyPI page carries the repository README's branding (badges with PyPI version, Python versions
@@ -104,6 +110,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **CI**: the Python integration tests can no longer pass by skipping on Linux. They skip when nothing listens at `ADBC_ORACLE_TEST_URI`'s host and port, so a dead Oracle service container left the Linux legs green with the integration suite unrun. With `ADBC_ORACLE_TEST_REQUIRE_SERVER=1` (set on CI's Linux legs) an unreachable server fails them instead; macOS and Windows, which have no Oracle service, still skip.
 - **CI**: a change that touches only documentation (`*.md`, `docs/`, `LICENSE`, `NOTICE`) skips the build and test jobs, and one job, `CI result`, reports on every run and is the only required check. The glibc-2.28 install check retries `dnf install` with fresh metadata, so a mirror serving a broken `repomd.xml` can't fail a build.
 - **Tests** read only `ADBC_ORACLE_*` settings, so a developer's own Oracle environment can't reach them: `internal/ttc`'s live tests take `ADBC_ORACLE_TEST_URI`, `ADBC_ORACLE_NNE_URI`, `ADBC_ORACLE_NNE_REJECTED_URI` and `ADBC_ORACLE_TEST_TRACE` (were `ORACLE_TEST_HOST`/`_PORT`, `ORACLE_NNE_*`, `ORACLE_TRACE`), fail rather than skip when one is set and its server doesn't answer, and CI now runs the Native Network Encryption tests against servers that require and reject it.
+
+### Fixed
+
+- **Errors about a malformed URI or connect string repeated it, password included**
+  (`invalid URI "oracle://scott:S3cret%zz@db:1521/S": parse ...`, `cannot parse connect string
+  "scott/S3cret@db:1521/S"`). They now say what is wrong without quoting it, e.g. `[oracle]
+  invalid URI: a % that doesn't start a two-digit hex escape (write a literal % as %25)`.
+- The C library no longer reads `ADBC_DRIVER_DB2_LOG_LEVEL` (left over from the Db2 driver):
+  with it set, every database printed `Oracle does not support logging` to stderr. The driver
+  has no log output, so no variable is read.
+- Through the C library, an error message containing `%` (a `LIKE` pattern in a statement, a
+  value) could come out mangled for driver managers that don't ask for error details.
 
 ## [1.0.6] - 2026-11-09
 

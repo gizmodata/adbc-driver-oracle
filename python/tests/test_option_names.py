@@ -9,6 +9,7 @@ check runs in a child process with its own copy of the library.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import textwrap
@@ -47,9 +48,12 @@ def test_old_names_warn_once_and_never_show_values():
         assert db.get_option("oracle.query.batch_size") == "123"
         db.set_options(**{{"adbc.oracle.batch_size": "456"}})
         assert db.get_option("oracle.query.batch_size") == "456"
-        # Both names given: the new one wins, whatever the order.
+        # Separate calls: the last write wins under either name (a later old-name
+        # call is not ignored).
         db.set_options(**{{"oracle.query.number_type": "decimal"}})
         db.set_options(**{{"adbc.oracle.number_mode": "string"}})
+        assert db.get_option("oracle.query.number_type") == "string"
+        db.set_options(**{{"oracle.query.number_type": "decimal"}})
         assert db.get_option("adbc.oracle.number_mode") == "decimal"
         db.close()
         print("ok")
@@ -135,3 +139,92 @@ def test_connect_error_keeps_the_text_the_install_canary_matches():
     message = str(excinfo.value)
     assert "oracle: cannot connect to 127.0.0.1:1" in message, message
     assert "[oracle] oracle: cannot connect to 127.0.0.1:1" in message, message
+
+
+def test_log_level_variable_is_silent():
+    # The driver has no logger: ADBC_DRIVER_ORACLE_LOG_LEVEL (and the Db2 name the
+    # C library used to read) must not print anything when a database is created.
+    for name in ("ADBC_DRIVER_ORACLE_LOG_LEVEL", "ADBC_DRIVER_DB2_LOG_LEVEL"):
+        for level in ("debug", "info", "warn", "error", "bogus"):
+            proc = subprocess.run(
+                args=[
+                    sys.executable,
+                    "-c",
+                    textwrap.dedent(
+                        """
+                        import adbc_driver_manager, adbc_driver_oracle
+                        db = adbc_driver_manager.AdbcDatabase(
+                            driver=adbc_driver_oracle._driver_path(), uri="oracle://u@127.0.0.1:1/none"
+                        )
+                        db.close()
+                        """
+                    ),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+                env={**os.environ, name: level},
+            )
+            assert proc.returncode == 0, proc.stderr
+            assert proc.stderr == "", (name, level, proc.stderr)
+
+
+def test_uri_read_back_hides_the_password():
+    import adbc_driver_manager
+
+    import adbc_driver_oracle
+
+    db = adbc_driver_manager.AdbcDatabase(
+        driver=adbc_driver_oracle._driver_path(), uri="oracle://scott:S3cretPW@127.0.0.1:1/FREEPDB1?password=S3cretPW"
+    )
+    try:
+        got = db.get_option("uri")
+    finally:
+        db.close()
+    assert "S3cretPW" not in got
+    assert got == "oracle://scott:xxxxx@127.0.0.1:1/FREEPDB1?password=xxxxx"
+
+
+def test_uri_errors_never_quote_the_password():
+    import adbc_driver_manager
+
+    import adbc_driver_oracle
+
+    for uri in (
+        "oracle://scott:S3cret%zz@db.example.invalid:1521/S",
+        "db.example.invalid:1521/S?x=%zz&password=S3cret",
+        "scott/S3cret@db.example.invalid:1521/S",
+    ):
+        db = adbc_driver_manager.AdbcDatabase(driver=adbc_driver_oracle._driver_path(), uri=uri)
+        try:
+            with pytest.raises(adbc_driver_manager.Error) as excinfo:
+                adbc_driver_manager.AdbcConnection(db)
+        finally:
+            db.close()
+        message = str(excinfo.value)
+        assert "[oracle] " in message, message
+        assert "S3cret" not in message, message
+        assert "%zz" not in message, message
+
+
+@pytest.mark.integration
+def test_connection_options_before_init_new_name_wins(oracle_server):
+    # Options set on a connection before Init reach the driver as one batch; with
+    # both names the new one must win every time, not by Go's map order.
+    import adbc_driver_manager
+
+    import adbc_driver_oracle
+
+    db = adbc_driver_manager.AdbcDatabase(driver=adbc_driver_oracle._driver_path(), uri=oracle_server.uri)
+    try:
+        for _ in range(40):
+            conn = adbc_driver_manager.AdbcConnection(
+                db, **{"adbc.oracle.number_mode": "string", "oracle.query.number_type": "decimal"}
+            )
+            try:
+                assert conn.get_option("oracle.query.number_type") == "decimal"
+            finally:
+                conn.close()
+    finally:
+        db.close()

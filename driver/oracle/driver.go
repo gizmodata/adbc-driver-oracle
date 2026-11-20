@@ -38,7 +38,9 @@ func (d *driverImpl) NewDatabaseWithContext(_ context.Context, opts map[string]s
 			return nil, err
 		}
 	}
-	return &databaseImpl{alloc: d.alloc, opts: cloneMap(opts)}, nil
+	// Stored under the current names; a new name given with its old one in
+	// the same map wins.
+	return &databaseImpl{alloc: d.alloc, opts: canonicalOptions(opts)}, nil
 }
 
 type databaseImpl struct {
@@ -55,7 +57,9 @@ func (d *databaseImpl) SetOptions(opts map[string]string) error {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	for k, v := range opts {
+	// One call: a new name given with its old one wins; against earlier
+	// calls, last write wins (everything is stored under the current name).
+	for k, v := range canonicalOptions(opts) {
 		d.opts[k] = v
 	}
 	return nil

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"sync"
 )
 
@@ -11,8 +12,10 @@ import (
 // to its current name. The old keys still work, for setting and for
 // GetOption, at every level that accepted them, but the first use of each one
 // in a process prints a single line to stderr naming the old and the new key
-// (never the value: options carry passwords and tokens). When both an old and
-// a new key are given, the new one wins. The old keys will be removed in 2.0.0.
+// (never the value: options carry passwords and tokens). Options are stored
+// under their new names: when one call (a NewDatabase map, one SetOptions)
+// gives both an old and a new key, the new one wins; across separate calls the
+// last write wins. The old keys will be removed in 2.0.0.
 var DeprecatedOptions = map[string]string{
 	"adbc.oracle.host":                      OptionHost,
 	"adbc.oracle.port":                      OptionPort,
@@ -60,14 +63,34 @@ var DeprecatedOptions = map[string]string{
 	"adbc.oracle.ingest.tablespace":         OptionIngestTablespace,
 }
 
-// oldOptionFor is the reverse of DeprecatedOptions: new key -> old key.
-var oldOptionFor = func() map[string]string {
-	m := make(map[string]string, len(DeprecatedOptions))
-	for oldKey, newKey := range DeprecatedOptions {
-		m[newKey] = oldKey
+// CurrentOptionName returns the current name of an option key: the new name
+// for a key in DeprecatedOptions, else the key itself. It never warns.
+func CurrentOptionName(key string) string {
+	if newKey, ok := DeprecatedOptions[key]; ok {
+		return newKey
 	}
-	return m
-}()
+	return key
+}
+
+// SortOptionKeysForApply orders option keys for applying them one at a time
+// as one batch (the C library's connection options set before Init): old
+// names first, then current ones, each sorted, so a current name given with
+// its old one is applied last and wins, as in NewDatabase.
+func SortOptionKeysForApply(opts map[string]string) []string {
+	keys := make([]string, 0, len(opts))
+	for k := range opts {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		_, oldI := DeprecatedOptions[keys[i]]
+		_, oldJ := DeprecatedOptions[keys[j]]
+		if oldI != oldJ {
+			return oldI
+		}
+		return keys[i] < keys[j]
+	})
+	return keys
+}
 
 var (
 	// deprecationWarned records the old keys already warned about in this

@@ -39,7 +39,9 @@ internal/tns/      TNS packet layer (CONNECT/ACCEPT/REDIRECT/DATA/MARKER), TLS, 
 internal/ttc/      TTC messages: negotiation, auth, open/execute/fetch/close, errors
 internal/oratype/  NUMBER, DATE/TIMESTAMP(TZ/LTZ), INTERVAL, RAW, ROWID, LOB codecs
 driver/oracle/     ADBC Driver/Database/Connection/Statement, options, Arrow conv, metadata, ingest
-pkg/oracle/        cgo c-shared wrapper — entrypoint AdbcDriverOracleInit (deprecated alias OracleDriverInit)
+pkg/oracle/        cgo c-shared wrapper — entrypoint AdbcDriverOracleInit (deprecated alias OracleDriverInit);
+                   driver.go is generated from arrow-adbc's _tmpl but carries local edits,
+                   listed in its header comment: keep them when regenerating
 python/            adbc_driver_oracle wheel sources + tests
 ```
 
@@ -266,7 +268,10 @@ adbc-gen-workflow tooling, and don't register or open anything with that org.
   `username`, `password`, `adbc.connection.*`, `adbc.ingest.*`) keep their
   names. The pre-1.1.0 `adbc.oracle.*` names are aliases in
   `driver/oracle/options_deprecated.go` (`DeprecatedOptions`: one stderr
-  warning per old key per process, key names only; the new name wins) until
+  warning per old key per process, key names only; options are stored under
+  the new name: within one call the new name wins, across calls the last
+  write wins; the C wrapper applies pre-Init connection options with
+  `SortOptionKeysForApply`) until
   2.0.0. Error messages start with `[oracle] ` (`errStatus` / `driverMsg`).
 - **DriverInfoName / vendor string:** "ADBC Oracle Driver - Go" /
   "Oracle Database".

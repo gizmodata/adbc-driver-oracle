@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -275,7 +276,8 @@ func TestDeprecatedDatabaseGetOption(t *testing.T) {
 	}
 }
 
-// The new name wins when both are given, whatever order they arrive in.
+// The new name wins when both are given in one call (whatever the map order);
+// across separate SetOption calls the last write wins.
 func TestNewOptionNameTakesPrecedence(t *testing.T) {
 	captureDeprecations(t)
 	uri := "oracle://scott:tiger@127.0.0.1:1521/FREEPDB1"
@@ -299,15 +301,16 @@ func TestNewOptionNameTakesPrecedence(t *testing.T) {
 		for _, key := range order {
 			require.NoError(t, opts.SetOption(key, values[key]))
 		}
+		last := values[order[1]]
 		for _, key := range []string{"adbc.oracle.batch_size", OptionBatchSize} {
 			got, err := opts.GetOption(key)
 			require.NoError(t, err)
-			require.Equal(t, "2", got, "%s (set in order %v)", key, order)
+			require.Equal(t, last, got, "%s (set in order %v)", key, order)
 		}
 		d := db.(*databaseImpl)
 		cfg, err := parseOptions(d.opts)
 		require.NoError(t, err)
-		require.Equal(t, 2, cfg.batchSize, "order %v", order)
+		require.Equal(t, last, strconv.Itoa(cfg.batchSize), "order %v", order)
 	}
 }
 

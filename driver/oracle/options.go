@@ -3,7 +3,9 @@ package oracle
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/url"
 	"os"
@@ -268,15 +270,28 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 	var host string
 	port := 0
 
+	// A URI may spell one setting several ways (?nne_checksum= and ?checksum=);
+	// two spellings with different values are refused rather than letting the
+	// parameters' (unordered) iteration pick one. Messages name the parameters,
+	// never their values.
+	seenParam := map[string]string{} // setting -> parameter that set it
+	seenValue := map[string]string{} // setting -> value
 	setParam := func(key, v string) error {
-		switch strings.ToLower(key) {
+		lower := strings.ToLower(key)
+		if setting, ok := uriParamSetting[lower]; ok {
+			if prev, dup := seenParam[setting]; dup && seenValue[setting] != v {
+				return errStatus(adbc.StatusInvalidArgument, "URI parameters %q and %q set the same option to different values", prev, key)
+			}
+			seenParam[setting], seenValue[setting] = key, v
+		}
+		switch lower {
 		case "tls", "ssl", "tcps":
 			tlsEnabled = isTrue(v)
 		case "tls_ca_cert", "ca_cert", "ssl_ca":
 			caCert = v
-		case "tls_skip_verify", "ssl_skip_verify":
+		case "tls_skip_verify", "ssl_skip_verify", "skip_verify":
 			skipVerify = isTrue(v)
-		case "tls_server_name", "ssl_server_name":
+		case "tls_server_name", "ssl_server_name", "server_name":
 			serverName = v
 		case "tls_wallet_location", "wallet_location", "wallet":
 			walletLocation = v
@@ -361,16 +376,16 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 			}
 			cfg.nneEnc = l
 			cfg.nneEncSet = true
-		case "nne_checksum", "data_integrity":
+		case "nne_checksum", "data_integrity", "checksum":
 			l, err := parseNNELevel(v)
 			if err != nil {
 				return err
 			}
 			cfg.nneChk = l
 			cfg.nneChkSet = true
-		case "nne_encryption_algorithms":
+		case "nne_encryption_algorithms", "encryption_algorithms":
 			cfg.nneEncAlgos = splitCSV(v)
-		case "nne_checksum_algorithms":
+		case "nne_checksum_algorithms", "checksum_algorithms":
 			cfg.nneChkAlgos = splitCSV(v)
 		case "sdu":
 			n, err := strconv.Atoi(v)
@@ -398,7 +413,8 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 		case strings.Contains(raw, "://") && !strings.HasPrefix(strings.ToLower(raw), "tcp://") && !strings.HasPrefix(strings.ToLower(raw), "tcps://"):
 			u, err := url.Parse(raw)
 			if err != nil {
-				return nil, errStatus(adbc.StatusInvalidArgument, "invalid URI %q: %v", raw, err)
+				// Never quote the URI or Go's error (which does): it can hold a password.
+				return nil, errStatus(adbc.StatusInvalidArgument, "invalid URI: %s", describeURIError(err))
 			}
 			switch strings.ToLower(u.Scheme) {
 			case "oracle", "oracledb", "ora":
@@ -416,7 +432,7 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 			if p != "" {
 				port, err = strconv.Atoi(p)
 				if err != nil {
-					return nil, errStatus(adbc.StatusInvalidArgument, "invalid port %q", p)
+					return nil, errStatus(adbc.StatusInvalidArgument, "invalid URI: the port after the host is not a number")
 				}
 			}
 			if u.User != nil {
@@ -429,7 +445,11 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 			if path != "" {
 				cfg.ttc.ServiceName = path
 			}
-			for key, vals := range u.Query() {
+			query, err := url.ParseQuery(u.RawQuery)
+			if err != nil {
+				return nil, errStatus(adbc.StatusInvalidArgument, "invalid URI parameters: %s", describeURIError(err))
+			}
+			for key, vals := range query {
 				if len(vals) == 0 {
 					continue
 				}
@@ -441,7 +461,7 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 			// Easy Connect: [tcp[s]://]host[:port]/service[:server][?params]
 			m := easyConnectRe.FindStringSubmatch(raw)
 			if m == nil {
-				return nil, errStatus(adbc.StatusInvalidArgument, "cannot parse connect string %q", raw)
+				return nil, errStatus(adbc.StatusInvalidArgument, "cannot parse the connect string: expected oracle://[user[:password]@]host[:port]/service[?params], host[:port]/service[:server][?params] (user and password as options) or a (DESCRIPTION=...) descriptor")
 			}
 			if strings.EqualFold(m[1], "tcps") {
 				tlsEnabled = true
@@ -457,7 +477,7 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 			if m[6] != "" {
 				q, err := url.ParseQuery(m[6])
 				if err != nil {
-					return nil, errStatus(adbc.StatusInvalidArgument, "invalid parameters in %q", raw)
+					return nil, errStatus(adbc.StatusInvalidArgument, "invalid connect string parameters: %s", describeURIError(err))
 				}
 				for key, vals := range q {
 					if err := setParam(key, vals[0]); err != nil {
@@ -850,18 +870,132 @@ func isTrue(v string) bool {
 	return false
 }
 
+// maxTimeout bounds the connect timeout: larger values are almost certainly a
+// mistake, and float seconds beyond ~292 years overflow time.Duration.
+const maxTimeout = 24 * time.Hour
+
+// parseTimeout reads a timeout: seconds (whole or fractional) or a Go duration
+// such as "1.5s", from 0 up to 24 hours.
 func parseTimeout(v string) (time.Duration, error) {
-	if n, err := strconv.Atoi(v); err == nil {
-		return time.Duration(n) * time.Second, nil
-	}
-	if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 {
-		return time.Duration(f * float64(time.Second)), nil
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil {
-		return 0, errStatus(adbc.StatusInvalidArgument, "invalid timeout %q: %v", v, err)
+	v = strings.TrimSpace(v)
+	var d time.Duration
+	if f, err := strconv.ParseFloat(v, 64); err == nil {
+		if math.IsNaN(f) || math.IsInf(f, 0) || f < 0 || f > maxTimeout.Seconds() {
+			return 0, errStatus(adbc.StatusInvalidArgument, "invalid timeout %q: want 0 to %d seconds", v, int(maxTimeout.Seconds()))
+		}
+		d = time.Duration(f * float64(time.Second))
+	} else {
+		pd, err := time.ParseDuration(v)
+		if err != nil {
+			return 0, errStatus(adbc.StatusInvalidArgument, "invalid timeout %q: want seconds or a duration like \"1.5s\"", v)
+		}
+		if pd < 0 || pd > maxTimeout {
+			return 0, errStatus(adbc.StatusInvalidArgument, "invalid timeout %q: want 0 to %s", v, maxTimeout)
+		}
+		d = pd
 	}
 	return d, nil
+}
+
+// uriParamSetting maps every URI parameter spelling to the setting it sets, for
+// the spellings that have more than one.
+var uriParamSetting = func() map[string]string {
+	groups := [][]string{
+		{"tls", "ssl", "tcps"},
+		{"tls_ca_cert", "ca_cert", "ssl_ca"},
+		{"tls_skip_verify", "ssl_skip_verify", "skip_verify"},
+		{"tls_server_name", "ssl_server_name", "server_name"},
+		{"tls_wallet_location", "wallet_location", "wallet"},
+		{"tls_wallet_password", "wallet_password"},
+		{"service_name", "service"},
+		{"server", "server_type"},
+		{"schema", "current_schema", "currentschema"},
+		{"connect_timeout_seconds", "connect_timeout", "logintimeout", "tcp_connect_timeout"},
+		{"application_name", "program", "applicationname"},
+		{"prefetch_rows", "arraysize"},
+		{"user", "username", "uid"},
+		{"password", "pwd"},
+		{"session_time_zone", "time_zone"},
+		{"number_type", "number_mode"},
+		{"interval_type", "interval_mode"},
+		{"date_type", "date_mode"},
+		{"nne", "encryption"},
+		{"nne_checksum", "data_integrity", "checksum"},
+		{"nne_encryption_algorithms", "encryption_algorithms"},
+		{"nne_checksum_algorithms", "checksum_algorithms"},
+	}
+	m := map[string]string{}
+	for _, g := range groups {
+		for _, name := range g {
+			m[name] = g[0]
+		}
+	}
+	return m
+}()
+
+// describeURIError says what is wrong with a URI or its parameters without
+// quoting any of it (Go's url errors quote the whole URI, password included).
+func describeURIError(err error) string {
+	var escErr url.EscapeError
+	if errors.As(err, &escErr) {
+		return "a % that doesn't start a two-digit hex escape (write a literal % as %25)"
+	}
+	var hostErr url.InvalidHostError
+	if errors.As(err, &hostErr) {
+		return "invalid characters in the host (percent-encode special characters in the user name and password)"
+	}
+	return "cannot parse it as oracle://[user[:password]@]host[:port]/service[?params] (percent-encode special characters such as / @ : % in the user name and password)"
+}
+
+// secretURIParams are the URI parameters whose values redactURI hides.
+var secretURIParams = map[string]bool{"password": true, "pwd": true, "token": true, "wallet_password": true, "tls_wallet_password": true}
+
+// redactURI returns a URI with its password and secret parameters replaced by
+// "xxxxx" (the form of url.URL.Redacted), for GetOption("uri"). A URI that
+// can't be parsed comes back as "xxxxx" entirely.
+func redactURI(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || strings.HasPrefix(trimmed, "(") {
+		return raw // a connect descriptor carries no credentials
+	}
+	redactQuery := func(q string) (string, bool) {
+		values, err := url.ParseQuery(q)
+		if err != nil {
+			return "", false
+		}
+		for k := range values {
+			if secretURIParams[strings.ToLower(k)] {
+				values[k] = []string{"xxxxx"}
+			}
+		}
+		return values.Encode(), true
+	}
+	if strings.Contains(trimmed, "://") {
+		u, err := url.Parse(trimmed)
+		if err != nil {
+			return "xxxxx"
+		}
+		if u.RawQuery != "" {
+			q, ok := redactQuery(u.RawQuery)
+			if !ok {
+				return "xxxxx"
+			}
+			u.RawQuery = q
+		}
+		return u.Redacted()
+	}
+	base, query, hasQuery := strings.Cut(trimmed, "?")
+	if strings.ContainsAny(base, "@") {
+		return "xxxxx" // not a form the driver reads; it may hold user/password@
+	}
+	if !hasQuery {
+		return trimmed
+	}
+	q, ok := redactQuery(query)
+	if !ok {
+		return "xxxxx"
+	}
+	return base + "?" + q
 }
 
 // errPrefix starts every error message, per the ADBC driver style guide's

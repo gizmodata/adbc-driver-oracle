@@ -18,7 +18,9 @@ func (d *databaseImpl) SetOption(key, value string) error {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.opts[key] = value
+	// Stored under the current name, so a later call under either name
+	// replaces it: separate calls are last-write-wins.
+	d.opts[canonicalOption(key)] = value
 	return nil
 }
 
@@ -31,14 +33,12 @@ func (d *databaseImpl) GetOption(key string) (string, error) {
 	case OptionPassword, OptionWalletPassword, OptionToken:
 		return "", errStatus(adbc.StatusNotFound, "option %q is write-only", key)
 	}
-	// The current name wins over its old one, as when connecting.
 	if v, ok := d.opts[name]; ok {
-		return v, nil
-	}
-	if oldKey, ok := oldOptionFor[name]; ok {
-		if v, ok := d.opts[oldKey]; ok {
-			return v, nil
+		if name == OptionURI {
+			// The URI can carry a password: never hand it back.
+			return redactURI(v), nil
 		}
+		return v, nil
 	}
 	return "", errStatus(adbc.StatusNotFound, "unknown database option %q", key)
 }

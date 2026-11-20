@@ -574,8 +574,14 @@ and `oracle.nne.*`. Standard ADBC options (`uri`, `username`, `password`, `adbc.
 | `oracle.sdu`                         | (server)  | Requested session data unit (packet size) in bytes.                   |
 | `oracle.trace`                       | `false`   | `true` → hex-dump TNS packets to stderr.                              |
 
-All of these are also accepted as `?key=value` URI query parameters, by the last part
-of the name (e.g. `?tls=true&number_type=decimal&connect_timeout_seconds=5`).
+All of these except `oracle.host` and `oracle.port` (which go in the URI itself,
+`oracle://host:port/...`) are also accepted as `?key=value` URI query parameters, by the last
+part of the name (e.g. `?tls=true&skip_verify=false&number_type=decimal&checksum=required`).
+The older parameter spellings still work (`tls_skip_verify`, `nne_checksum`, `number_mode`, ...);
+a URI that gives one setting under two spellings with different values is refused. Options
+given outside the URI override its parameters. `GetOption("uri")` returns the URI with its
+password and any `password` / `pwd` / `token` / `wallet_password` parameters replaced by `xxxxx`,
+and errors about a URI never repeat it.
 A database option the driver doesn't know is refused with `NOT_IMPLEMENTED`, so a
 misspelt key fails instead of being ignored; standard ADBC connection, statement and
 ingest keys (`adbc.connection.*`, `adbc.statement.*`, `adbc.ingest.*`) set at the
@@ -591,8 +597,10 @@ by Native Network Encryption and with what.
 **Option names before 1.1.0.** The driver's options used to be named `adbc.oracle.*`.
 Those names still work, for setting and reading, but the first use of each one in a process
 prints one line to stderr, `[oracle] option "adbc.oracle.batch_size" is deprecated; use
-"oracle.query.batch_size"` (key names only, never the value). When both names are given,
-the new one wins. The old names will be removed in 2.0.0. The full list is in the
+"oracle.query.batch_size"` (key names only, never the value). Each option is stored under its
+new name: when one call (the options a database is created with, one `SetOptions`, or the
+options set on a connection before it opens) gives both names, the new one wins; across
+separate calls the last one wins, whichever name it uses. The old names will be removed in 2.0.0. The full list is in the
 [CHANGELOG](https://github.com/gizmodata/adbc-driver-oracle/blob/main/CHANGELOG.md#110---2026-11-20)
 and in Go as `oracle.DeprecatedOptions`.
 
