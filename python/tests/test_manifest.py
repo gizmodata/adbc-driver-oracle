@@ -80,3 +80,27 @@ def test_option_enums_follow_the_style_guide():
     assert DatabaseOptions.CONNECT_TIMEOUT is DatabaseOptions.CONNECT_TIMEOUT_SECONDS
     assert ConnectionOptions.DATE_MODE is ConnectionOptions.DATE_TYPE
     assert StatementOptions.INGEST_STRING_TYPE.value == "oracle.ingest.string_type"
+
+
+@pytest.mark.parametrize(
+    ("platform_tuple", "keys"),
+    [
+        ("windows_amd64", ["windows_amd64", "windows_amd64_mingw"]),
+        ("windows_arm64", ["windows_arm64", "windows_arm64_mingw"]),
+        ("linux_amd64", ["linux_amd64"]),
+        ("macos_arm64", ["macos_arm64"]),
+    ],
+)
+def test_driver_shared_keys(monkeypatch, tmp_path, platform_tuple, keys):
+    # R on Windows (adbcdrivermanager, built with MinGW) looks up windows_<arch>_mingw;
+    # Python and other MSVC builds look up windows_<arch>. Both must name the library.
+    import adbc_driver_oracle
+    from adbc_driver_oracle import _manifest
+
+    lib = tmp_path / "libadbc_driver_oracle.dll"
+    lib.write_bytes(data=b"")
+    monkeypatch.setattr(_manifest, "_platform_tuple", lambda: platform_tuple)
+    monkeypatch.setattr(adbc_driver_oracle, "_driver_path", lambda: str(lib))
+    text = _manifest.render_manifest()
+    shared = text.split("[Driver.shared]\n", 1)[1].splitlines()
+    assert shared == [f"{key} = '{lib.resolve()}'" for key in keys]

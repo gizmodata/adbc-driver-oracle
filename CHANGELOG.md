@@ -113,6 +113,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- On Windows, the driver manifest that `python -m adbc_driver_oracle install-manifest` writes also names the library under `windows_<arch>_mingw`, the key R's `adbcdrivermanager` (built with MinGW) looks up, so loading the driver by name from R on Windows works ([gizmodata/adbc-install#10](https://github.com/gizmodata/adbc-install/issues/10)). Run it again to update an existing manifest.
 - **Errors about a malformed URI or connect string repeated it, password included**
   (`invalid URI "oracle://scott:S3cret%zz@db:1521/S": parse ...`, `cannot parse connect string
   "scott/S3cret@db:1521/S"`). They now say what is wrong without quoting it, e.g. `[oracle]
