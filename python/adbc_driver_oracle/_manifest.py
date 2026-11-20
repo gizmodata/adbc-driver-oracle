@@ -49,6 +49,18 @@ def _platform_tuple() -> str:
     return f"{os_name}_{arch}"
 
 
+def _shared_keys() -> list[str]:
+    """The ``Driver.shared`` keys naming this library.
+
+    On Windows the same library is named twice: ``windows_<arch>`` for driver
+    managers built with MSVC (Python, Rust, ...), ``windows_<arch>_mingw`` for
+    those built with MinGW (R's adbcdrivermanager, built with Rtools). The
+    library exports plain C functions, so both kinds load it.
+    """
+    key = _platform_tuple()
+    return [key, f"{key}_mingw"] if key.startswith("windows_") else [key]
+
+
 def _user_config_dir() -> pathlib.Path:
     """Per-user ADBC driver-manifest directory for this OS."""
     if sys.platform == "darwin":
@@ -90,6 +102,7 @@ def render_manifest() -> str:
     driver_path = pathlib.Path(_driver_path()).resolve()
     # The non-default entrypoint is load-bearing: without it the driver
     # manager looks for AdbcDriverInit and name-based loading fails.
+    shared = "\n".join(f"{key} = '{driver_path}'" for key in _shared_keys())
     return f"""\
 manifest_version = 1
 name = 'ADBC Oracle Driver - Go'
@@ -105,7 +118,7 @@ version = '1.1.0'
 entrypoint = 'AdbcDriverOracleInit'
 
 [Driver.shared]
-{_platform_tuple()} = '{driver_path}'
+{shared}
 """
 
 
