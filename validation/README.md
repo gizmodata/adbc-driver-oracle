@@ -50,7 +50,7 @@ with the reason recorded as a caveat in the case. The adaptations:
   carries a time of day (timestamp[s]), `''` is NULL.
 - **Temporary tables** are `GLOBAL TEMPORARY`: the definition outlives the session, only
   the rows are private. `test_temporary` checks that instead of "the table is gone".
-- **Long values** go into LOB columns through the driver's `adbc.oracle.ingest.string_type`
+- **Long values** go into LOB columns through the driver's `oracle.ingest.string_type`
   / `binary_type` options (in-row `VARCHAR2`/`RAW` stop at 4000/2000 bytes).
 - **Empty BLOB.** An empty, non-NULL BLOB reads back as NULL: LOBs are fetched inline,
   which doesn't distinguish the two (python-oracledb's `fetch_lobs=False` behaves the same).

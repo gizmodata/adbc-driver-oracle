@@ -146,7 +146,7 @@ setting.)
   closed in `Conn.verifyNNERequirement` (before authenticate) if the
   transport ended up without the required cipher/hash — never assume the
   negotiation happened. `Conn.NNEInfo()` → driver read-only options
-  `adbc.oracle.nne_active`/`nne_algorithms`. Negotiation then DH key
+  `oracle.nne.active`/`oracle.nne.algorithms`. Negotiation then DH key
   exchange installs packet AES-CBC + keyed-hash protection on the
   transport. Must reset `caps` before an ANO reconnect so the fresh
   CONNECT is 2-byte-framed. The checksum keystream evolves per DATA
@@ -195,7 +195,7 @@ setting.)
 ## Password verifiers
 
 `internal/ttc/auth.go` handles 12c (0x4815, PBKDF2/SHA-512), 11g (0xb152 /
-0x1b25, SHA-1) and, only with `adbc.oracle.allow_10g_verifier=true`, 10g
+0x1b25, SHA-1) and, only with `oracle.auth.allow_10g_verifier=true`, 10g
 (0x939, O3LOGON: DES hash of upper(user||password) in UTF-16BE, ported from
 go-ora, see NOTICE). Without the option a 0x939 challenge fails in
 `authMessage.write` before any key material is derived (`Err10gVerifierNotAllowed`,
@@ -258,9 +258,16 @@ adbc-gen-workflow tooling, and don't register or open anything with that org.
   flightsql's `globalPoison` + `defer/recover`; keep driver code from
   panicking regardless.
 - **Apache Arrow Go pin: v18**, arrow-adbc Go v1.11. Match the siblings.
-- **Option naming:** `adbc.oracle.<noun>` (e.g. `adbc.oracle.tls`,
-  `adbc.oracle.batch_size`). Standard ADBC keys (`uri`, `username`,
-  `password`, ingest options) are used where they exist.
+- **Option naming** follows the [ADBC driver style guide](https://adbc-drivers.org/building-drivers/style-guide.html):
+  `oracle[.group].option`, never starting with `adbc.`; groups are
+  `oracle.query.*` (results, Arrow types: `*_type`), `oracle.ingest.*`,
+  `oracle.tls.*`, `oracle.auth.*`, `oracle.session.*`, `oracle.nne.*`; a
+  timeout in seconds ends in `_seconds`. Standard ADBC keys (`uri`,
+  `username`, `password`, `adbc.connection.*`, `adbc.ingest.*`) keep their
+  names. The pre-1.1.0 `adbc.oracle.*` names are aliases in
+  `driver/oracle/options_deprecated.go` (`DeprecatedOptions`: one stderr
+  warning per old key per process, key names only; the new name wins) until
+  2.0.0. Error messages start with `[oracle] ` (`errStatus` / `driverMsg`).
 - **DriverInfoName / vendor string:** "ADBC Oracle Driver - Go" /
   "Oracle Database".
 - **Python floor:** `>=3.10`; pyarrow `>=14.0.1`; adbc-driver-manager

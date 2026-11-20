@@ -6,8 +6,99 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-20
+
 ### Changed
 
+- **Option names follow the [ADBC driver style guide](https://adbc-drivers.org/building-drivers/style-guide.html)**:
+  driver options are `oracle.<option>` instead of `adbc.oracle.<option>` (the `adbc.` prefix is
+  for options the ADBC specification defines), grouped as `oracle.query.*` (result batches and
+  Arrow types, where the type policies are now `*_type`), `oracle.ingest.*`, `oracle.tls.*`,
+  `oracle.auth.*`, `oracle.session.*` and `oracle.nne.*`; the dial timeout is
+  `oracle.connect_timeout_seconds`. Standard ADBC keys (`uri`, `username`, `password`,
+  `adbc.connection.*`, `adbc.ingest.*`, ...) are unchanged. **The old names keep working**, for
+  setting and for reading back (`GetOption`), at every level that accepted them: the first use
+  of each one in a process prints one line to stderr,
+  `[oracle] option "adbc.oracle.batch_size" is deprecated; use "oracle.query.batch_size"`, with
+  the key names only, never the value. When both names are given, the new one wins. The old
+  names will be removed in 2.0.0. In Go they are listed in `oracle.DeprecatedOptions`; the Go
+  constants keep their names (with `OptionNumberType`, `OptionIntervalType`, `OptionDateType`
+  and `OptionConnectTimeoutSeconds` added, and `OptionSessionModule` / `Action` / `ClientInfo` /
+  `ClientIdentifier` for the tracing attributes), and the Python enums keep their members, with
+  `NUMBER_TYPE`, `INTERVAL_TYPE`, `DATE_TYPE` and `CONNECT_TIMEOUT_SECONDS` added (the old member
+  names are aliases) and `ConnectionOptions.NNE_ACTIVE` / `NNE_ALGORITHMS` / `USE_EXTENSION_TYPES`.
+  URI parameters take the last part of the new names too (`?number_type=decimal`,
+  `?connect_timeout_seconds=5`); the old parameter names still work.
+
+  | Before 1.1.0 | 1.1.0 |
+  |---|---|
+  | `adbc.oracle.host` | `oracle.host` |
+  | `adbc.oracle.port` | `oracle.port` |
+  | `adbc.oracle.service_name` | `oracle.service_name` |
+  | `adbc.oracle.sid` | `oracle.sid` |
+  | `adbc.oracle.tls` | `oracle.tls` |
+  | `adbc.oracle.tls.ca_cert` | `oracle.tls.ca_cert` |
+  | `adbc.oracle.tls.skip_verify` | `oracle.tls.skip_verify` |
+  | `adbc.oracle.tls.server_name` | `oracle.tls.server_name` |
+  | `adbc.oracle.wallet_location` | `oracle.tls.wallet_location` |
+  | `adbc.oracle.wallet_password` | `oracle.tls.wallet_password` |
+  | `adbc.oracle.token` | `oracle.auth.token` |
+  | `adbc.oracle.mode` | `oracle.auth.mode` |
+  | `adbc.oracle.allow_10g_verifier` | `oracle.auth.allow_10g_verifier` |
+  | `adbc.oracle.connect_timeout` | `oracle.connect_timeout_seconds` |
+  | `adbc.oracle.batch_size` | `oracle.query.batch_size` |
+  | `adbc.oracle.batch_bytes` | `oracle.query.batch_bytes` |
+  | `adbc.oracle.prefetch_rows` | `oracle.query.prefetch_rows` |
+  | `adbc.oracle.number_mode` | `oracle.query.number_type` |
+  | `adbc.oracle.interval_mode` | `oracle.query.interval_type` |
+  | `adbc.oracle.date_mode` | `oracle.query.date_type` |
+  | `adbc.oracle.use_extension_types` | `oracle.query.use_extension_types` |
+  | `adbc.oracle.session_time_zone` | `oracle.session.time_zone` |
+  | `adbc.oracle.application_name` | `oracle.session.application_name` |
+  | `adbc.oracle.current_schema` | `oracle.session.current_schema` |
+  | `adbc.oracle.module` | `oracle.session.module` |
+  | `adbc.oracle.action` | `oracle.session.action` |
+  | `adbc.oracle.client_info` | `oracle.session.client_info` |
+  | `adbc.oracle.client_identifier` | `oracle.session.client_identifier` |
+  | `adbc.oracle.nne` | `oracle.nne` |
+  | `adbc.oracle.nne_checksum` | `oracle.nne.checksum` |
+  | `adbc.oracle.nne_encryption_algorithms` | `oracle.nne.encryption_algorithms` |
+  | `adbc.oracle.nne_checksum_algorithms` | `oracle.nne.checksum_algorithms` |
+  | `adbc.oracle.nne_active` | `oracle.nne.active` |
+  | `adbc.oracle.nne_algorithms` | `oracle.nne.algorithms` |
+  | `adbc.oracle.disable_oob` | `oracle.disable_oob` |
+  | `adbc.oracle.sdu` | `oracle.sdu` |
+  | `adbc.oracle.trace` | `oracle.trace` |
+  | `adbc.oracle.ingest.batch_rows` | `oracle.ingest.batch_rows` |
+  | `adbc.oracle.ingest.varchar_length` | `oracle.ingest.varchar_length` |
+  | `adbc.oracle.ingest.raw_length` | `oracle.ingest.raw_length` |
+  | `adbc.oracle.ingest.string_type` | `oracle.ingest.string_type` |
+  | `adbc.oracle.ingest.binary_type` | `oracle.ingest.binary_type` |
+  | `adbc.oracle.ingest.struct_type` | `oracle.ingest.struct_type` |
+  | `adbc.oracle.ingest.tablespace` | `oracle.ingest.tablespace` |
+
+- **Error messages start with `[oracle]`**, the driver's slug, as the style guide asks
+  (`[oracle] unknown database option "x"`); the Go driver's own messages began with `oracle:`
+  or nothing, and the C library added `[Oracle] `. Messages from the wire layer keep their
+  text after the prefix (`[oracle] oracle: cannot connect to 127.0.0.1:1: ...`,
+  `[oracle] ORA-01017: ...`), so code matching them keeps working. An unknown option is
+  refused under the key exactly as it was given.
+- `oracle.tls.wallet_password` and `oracle.auth.token` are write-only like `password`:
+  `GetOption` no longer returns them. `GetOption` on a statement reports the
+  `oracle.ingest.*` options (with their defaults when unset). `oracle.connect_timeout_seconds`
+  accepts fractions of a second (`0.5`).
+- The C library's logging switch is `ADBC_DRIVER_ORACLE_LOG_LEVEL` (it read
+  `ADBC_DRIVER_DB2_LOG_LEVEL`), and `warn` selects the warning level.
+- **README** and the **PyPI page**: a badge says the driver follows the
+  [ADBC driver style guide](https://adbc-drivers.org/building-drivers/style-guide.html). The
+  PyPI page carries the repository README's branding (badges with PyPI version, Python versions
+  and downloads, a tagline, section icons, the GizmoData footer and the trademark notes), all
+  with absolute links, and an Options section with the new names.
+- **Dependencies**: arrow-go v18.8.0 → v18.9.0, golang.org/x/exp and golang.org/x/tools to their
+  latest; `go.mod` names toolchain go1.27.4 (the `go` directive stays 1.26.0) and CI builds with
+  Go 1.27.4 and zig 0.17.1 (was 0.14.1). Test and build floors: hardcharger[adbc] ≥ 2.13.3,
+  setuptools ≥ 84.2.1. The tests hold DuckDB below 2.0.1 (released today) until Query.Farm
+  publishes the `adbc_scanner` extension for it.
 - **PyPI page**: the package's description on PyPI is now its own Python-only page, `python/README.md` (install, requirements, connect and query, streaming, loading the driver by name), linking to the repository README for other languages, the one-line installer and the full reference; the repository README keeps everything. `python/tests/test_pypi_readme.py` runs every Python example on that page against the live database.
 - **README**: installing without Python is one line, `curl https://install.adbc.gizmodata.com/oracle | sh` (Linux, macOS) or `irm https://install.adbc.gizmodata.com/oracle.ps1 | iex` (Windows): it installs the release's shared library, checked against its `SHA256SUMS`, and a `oracle` driver manifest, so any ADBC driver manager loads it as `driver = "oracle"` ([gizmodata/adbc-install](https://github.com/gizmodata/adbc-install)).
 - **CI**: the Python integration tests can no longer pass by skipping on Linux. They skip when nothing listens at `ADBC_ORACLE_TEST_URI`'s host and port, so a dead Oracle service container left the Linux legs green with the integration suite unrun. With `ADBC_ORACLE_TEST_REQUIRE_SERVER=1` (set on CI's Linux legs) an unreachable server fails them instead; macOS and Windows, which have no Oracle service, still skip.

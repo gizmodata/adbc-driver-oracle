@@ -25,11 +25,20 @@ func (d *databaseImpl) SetOption(key, value string) error {
 func (d *databaseImpl) GetOption(key string) (string, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if key == OptionPassword {
+	// Old names act as their new ones; messages quote the key as the caller wrote it.
+	name := canonicalOption(key)
+	switch name {
+	case OptionPassword, OptionWalletPassword, OptionToken:
 		return "", errStatus(adbc.StatusNotFound, "option %q is write-only", key)
 	}
-	if v, ok := d.opts[key]; ok {
+	// The current name wins over its old one, as when connecting.
+	if v, ok := d.opts[name]; ok {
 		return v, nil
+	}
+	if oldKey, ok := oldOptionFor[name]; ok {
+		if v, ok := d.opts[oldKey]; ok {
+			return v, nil
+		}
 	}
 	return "", errStatus(adbc.StatusNotFound, "unknown database option %q", key)
 }
@@ -103,7 +112,8 @@ func (c *connectionImpl) SetOptionDouble(key string, value float64) error {
 // ---- statement ----
 
 func (s *statementImpl) GetOption(key string) (string, error) {
-	switch key {
+	name := canonicalOption(key)
+	switch name {
 	case adbc.OptionKeyIngestTargetTable:
 		return s.targetTable, nil
 	case adbc.OptionValueIngestTargetDBSchema:
@@ -118,6 +128,22 @@ func (s *statementImpl) GetOption(key string) (string, error) {
 			return adbc.OptionValueEnabled, nil
 		}
 		return adbc.OptionValueDisabled, nil
+	// Unset ingest options report their defaults; an unset struct_type
+	// is "" (JSON on 21c and later, else CLOB, decided at ingest).
+	case OptionIngestBatchRows:
+		return strconv.Itoa(orDefault(s.ingestBatchRows, defaultIngestBatchRows)), nil
+	case OptionIngestVarcharLength:
+		return strconv.Itoa(orDefault(s.ingestVarcharLength, 4000)), nil
+	case OptionIngestRawLength:
+		return strconv.Itoa(orDefault(s.ingestRawLength, 2000)), nil
+	case OptionIngestStringType:
+		return orDefault(s.ingestStringType, "VARCHAR2"), nil
+	case OptionIngestBinaryType:
+		return orDefault(s.ingestBinaryType, "RAW"), nil
+	case OptionIngestStructType:
+		return s.ingestStructType, nil
+	case OptionIngestTablespace:
+		return s.ingestTablespace, nil
 	}
 	return "", errStatus(adbc.StatusNotFound, "unknown statement option %q", key)
 }
@@ -152,3 +178,12 @@ var (
 	_ adbc.GetSetOptions = (*statementImpl)(nil)
 	_ context.Context    = context.Background()
 )
+
+// orDefault returns v, or def when v is its type's zero value.
+func orDefault[T comparable](v, def T) T {
+	var zero T
+	if v == zero {
+		return def
+	}
+	return v
+}

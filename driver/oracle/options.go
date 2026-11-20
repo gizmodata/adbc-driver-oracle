@@ -18,7 +18,14 @@ import (
 	"github.com/gizmodata/adbc-driver-oracle/internal/ttc"
 )
 
-// ADBC option keys. They follow the `adbc.<vendor>.<noun>` convention.
+// ADBC option keys. Driver-specific keys follow the ADBC driver style guide
+// (https://adbc-drivers.org/building-drivers/style-guide.html):
+// `oracle[.group].option`, with query behaviour under `oracle.query.*`, bulk
+// ingest under `oracle.ingest.*`, TLS under `oracle.tls.*`, authentication
+// under `oracle.auth.*`, session attributes under `oracle.session.*` and
+// Native Network Encryption under `oracle.nne.*`. The keys before 1.1.0
+// (`adbc.oracle.*`) still work but print a one-time deprecation warning; see
+// DeprecatedOptions.
 const (
 	// OptionURI is "uri": oracle://[user[:password]@]host[:port]/SERVICE[?params],
 	// an Easy Connect string (host[:port]/service) or a full
@@ -27,105 +34,123 @@ const (
 	OptionUsername = adbc.OptionKeyUsername
 	OptionPassword = adbc.OptionKeyPassword
 
-	OptionHost        = "adbc.oracle.host"
-	OptionPort        = "adbc.oracle.port"
-	OptionServiceName = "adbc.oracle.service_name"
-	OptionSID         = "adbc.oracle.sid"
+	OptionHost        = "oracle.host"
+	OptionPort        = "oracle.port"
+	OptionServiceName = "oracle.service_name"
+	OptionSID         = "oracle.sid"
 	// OptionTLS enables TLS ("tcps") transport.
-	OptionTLS = "adbc.oracle.tls"
+	OptionTLS = "oracle.tls"
 	// OptionTLSCACert is a path to a PEM CA bundle used to verify the server.
-	OptionTLSCACert = "adbc.oracle.tls.ca_cert"
+	OptionTLSCACert = "oracle.tls.ca_cert"
 	// OptionTLSSkipVerify disables server certificate verification.
-	OptionTLSSkipVerify = "adbc.oracle.tls.skip_verify"
+	OptionTLSSkipVerify = "oracle.tls.skip_verify"
 	// OptionTLSServerName overrides the SNI/verification host name.
-	OptionTLSServerName = "adbc.oracle.tls.server_name"
+	OptionTLSServerName = "oracle.tls.server_name"
 	// OptionWalletLocation is a directory containing ewallet.pem (Autonomous
 	// Database wallets); implies TLS.
-	OptionWalletLocation = "adbc.oracle.wallet_location"
-	// OptionWalletPassword is the ewallet.pem private key password.
-	OptionWalletPassword = "adbc.oracle.wallet_password"
-	// OptionConnectTimeout: plain digits are seconds, else a Go duration.
-	OptionConnectTimeout = "adbc.oracle.connect_timeout"
+	OptionWalletLocation = "oracle.tls.wallet_location"
+	// OptionWalletPassword is the ewallet.pem private key password
+	// (write-only).
+	OptionWalletPassword = "oracle.tls.wallet_password"
+	// OptionConnectTimeoutSeconds is the dial timeout in seconds (default
+	// 30; fractions and Go durations such as "1.5s" are accepted too).
+	OptionConnectTimeoutSeconds = "oracle.connect_timeout_seconds"
+	// Deprecated: use OptionConnectTimeoutSeconds.
+	OptionConnectTimeout = OptionConnectTimeoutSeconds
 	// OptionBatchSize caps rows per Arrow record batch (default 65536).
-	OptionBatchSize = "adbc.oracle.batch_size"
+	OptionBatchSize = "oracle.query.batch_size"
 	// OptionPrefetchRows is the number of rows fetched per server round
 	// trip (default: batch size).
-	OptionPrefetchRows = "adbc.oracle.prefetch_rows"
+	OptionPrefetchRows = "oracle.query.prefetch_rows"
 	// OptionTrace: "true" logs TNS packets to stderr.
-	OptionTrace = "adbc.oracle.trace"
+	OptionTrace = "oracle.trace"
 	// OptionApplicationName is reported as the client program name.
-	OptionApplicationName = "adbc.oracle.application_name"
+	OptionApplicationName = "oracle.session.application_name"
 	// OptionCurrentSchema sets the session's current schema after connect.
-	OptionCurrentSchema = "adbc.oracle.current_schema"
+	OptionCurrentSchema = "oracle.session.current_schema"
 	// OptionMode selects a privileged connection: "sysdba", "sysoper", ...
-	OptionMode = "adbc.oracle.mode"
+	OptionMode = "oracle.auth.mode"
 	// OptionSessionTimeZone sets the session TIME_ZONE (default "+00:00" so
 	// TIMESTAMP WITH LOCAL TIME ZONE values arrive as UTC).
-	OptionSessionTimeZone = "adbc.oracle.session_time_zone"
-	// OptionIntervalMode controls how INTERVAL columns map to Arrow:
+	OptionSessionTimeZone = "oracle.session.time_zone"
+	// OptionIntervalType controls how INTERVAL columns map to Arrow:
 	// "monthdaynano" (default), "duration" (DAY TO SECOND only; YEAR TO
 	// MONTH stays month_day_nano_interval) or "string" (ISO-8601 text).
-	OptionIntervalMode = "adbc.oracle.interval_mode"
-	// OptionDateMode controls how DATE columns map to Arrow: "timestamp"
+	OptionIntervalType = "oracle.query.interval_type"
+	// Deprecated: use OptionIntervalType.
+	OptionIntervalMode = OptionIntervalType
+	// OptionDateType controls how DATE columns map to Arrow: "timestamp"
 	// (default, timestamp[s] — Oracle DATE has a time component) or
 	// "date32" (drops the time of day).
-	OptionDateMode = "adbc.oracle.date_mode"
+	OptionDateType = "oracle.query.date_type"
+	// Deprecated: use OptionDateType.
+	OptionDateMode = OptionDateType
 	// OptionBatchBytes caps the approximate size of an Arrow record batch
 	// in bytes (default 8 MiB — keeps a batch under common transport
 	// limits such as gRPC's 16 MiB Flight SQL message cap; 0 = unlimited;
 	// rows are still capped by batch_size).
-	OptionBatchBytes = "adbc.oracle.batch_bytes"
+	OptionBatchBytes = "oracle.query.batch_bytes"
 	// OptionDisableOOB disables out-of-band (TCP urgent data) breaks used
 	// for statement cancellation.
-	OptionDisableOOB = "adbc.oracle.disable_oob"
+	OptionDisableOOB = "oracle.disable_oob"
 	// OptionNNE controls Native Network Encryption / data integrity
 	// (Oracle Advanced Networking): "accepted" (default — negotiate if the
 	// server asks), "requested", "required" (fail if the server won't
 	// encrypt), or "rejected"/"off" (never negotiate).
-	OptionNNE = "adbc.oracle.nne"
+	OptionNNE = "oracle.nne"
 	// OptionNNEChecksum controls the data-integrity level independently of
 	// encryption (same values as OptionNNE); defaults to follow OptionNNE.
-	OptionNNEChecksum = "adbc.oracle.nne_checksum"
+	OptionNNEChecksum = "oracle.nne.checksum"
 	// OptionNNEEncryptionAlgorithms restricts the offered encryption
 	// algorithms (comma-separated, e.g. "AES256,AES192").
-	OptionNNEEncryptionAlgorithms = "adbc.oracle.nne_encryption_algorithms"
+	OptionNNEEncryptionAlgorithms = "oracle.nne.encryption_algorithms"
 	// OptionNNEChecksumAlgorithms restricts the offered checksum algorithms
 	// (comma-separated, e.g. "SHA256,SHA512").
-	OptionNNEChecksumAlgorithms = "adbc.oracle.nne_checksum_algorithms"
+	OptionNNEChecksumAlgorithms = "oracle.nne.checksum_algorithms"
 	// OptionNNEActive (read-only, connection) reports whether Native
 	// Network Encryption / data integrity is active on the session:
 	// "true" or "false".
-	OptionNNEActive = "adbc.oracle.nne_active"
+	OptionNNEActive = "oracle.nne.active"
 	// OptionNNEAlgorithms (read-only, connection) reports the negotiated
 	// algorithms as "<encryption>,<checksum>" (e.g. "AES256,SHA512";
 	// empty entries when a service is off, "" when NNE is inactive).
-	OptionNNEAlgorithms = "adbc.oracle.nne_algorithms"
+	OptionNNEAlgorithms = "oracle.nne.algorithms"
 	// OptionUseExtensionTypes annotates JSON, object (arrow.json),
 	// SDO_GEOMETRY (geoarrow.wkb) and XMLType (arrow.opaque) columns with
 	// Arrow extension-type metadata.
-	OptionUseExtensionTypes = "adbc.oracle.use_extension_types"
-	// OptionNumberMode controls how NUMBER columns map to Arrow:
+	OptionUseExtensionTypes = "oracle.query.use_extension_types"
+	// OptionNumberType controls how NUMBER columns map to Arrow:
 	// "auto" (default: int64 / decimal128 / float64 by precision and
 	// scale), "decimal" (decimal128 wherever possible), "double", "string".
-	OptionNumberMode = "adbc.oracle.number_mode"
+	OptionNumberType = "oracle.query.number_type"
+	// Deprecated: use OptionNumberType.
+	OptionNumberMode = OptionNumberType
 	// OptionSDU requests a session data unit size (bytes).
-	OptionSDU = "adbc.oracle.sdu"
-	// OptionToken authenticates with an OAuth / IAM bearer token (TLS only).
-	OptionToken = "adbc.oracle.token"
+	OptionSDU = "oracle.sdu"
+	// OptionToken authenticates with an OAuth / IAM bearer token (TLS only;
+	// write-only).
+	OptionToken = "oracle.auth.token"
 	// OptionAllow10gVerifier: "true" lets accounts that have only a 10g
 	// (O3LOGON, DES-based) password verifier log in. Off by default: the 10g
 	// hash is weak, and a man-in-the-middle on a non-TLS connection could
 	// request it for any account to get an offline-crackable password hash.
-	OptionAllow10gVerifier = "adbc.oracle.allow_10g_verifier"
+	OptionAllow10gVerifier = "oracle.auth.allow_10g_verifier"
+
+	// Connection options: end-to-end tracing attributes
+	// (V$SESSION.MODULE / ACTION / CLIENT_INFO / CLIENT_IDENTIFIER).
+	OptionSessionModule           = "oracle.session.module"
+	OptionSessionAction           = "oracle.session.action"
+	OptionSessionClientInfo       = "oracle.session.client_info"
+	OptionSessionClientIdentifier = "oracle.session.client_identifier"
 
 	// Statement options for bulk ingest.
-	OptionIngestBatchRows     = "adbc.oracle.ingest.batch_rows"
-	OptionIngestVarcharLength = "adbc.oracle.ingest.varchar_length"
-	OptionIngestRawLength     = "adbc.oracle.ingest.raw_length"
-	OptionIngestStringType    = "adbc.oracle.ingest.string_type" // VARCHAR2 (default) or CLOB
-	OptionIngestBinaryType    = "adbc.oracle.ingest.binary_type" // RAW (default) or BLOB
-	OptionIngestStructType    = "adbc.oracle.ingest.struct_type" // JSON (default on 21c+), CLOB, VARCHAR2, BLOB
-	OptionIngestTablespace    = "adbc.oracle.ingest.tablespace"
+	OptionIngestBatchRows     = "oracle.ingest.batch_rows"
+	OptionIngestVarcharLength = "oracle.ingest.varchar_length"
+	OptionIngestRawLength     = "oracle.ingest.raw_length"
+	OptionIngestStringType    = "oracle.ingest.string_type" // VARCHAR2 (default) or CLOB
+	OptionIngestBinaryType    = "oracle.ingest.binary_type" // RAW (default) or BLOB
+	OptionIngestStructType    = "oracle.ingest.struct_type" // JSON (default on 21c+), CLOB, VARCHAR2, BLOB
+	OptionIngestTablespace    = "oracle.ingest.tablespace"
 
 	OptionIngestTable = adbc.OptionKeyIngestTargetTable
 )
@@ -168,7 +193,7 @@ func parseIntervalMode(v string) (string, error) {
 	case IntervalModeString, "text":
 		return IntervalModeString, nil
 	}
-	return "", errStatus(adbc.StatusInvalidArgument, "oracle: unknown %s %q", OptionIntervalMode, v)
+	return "", errStatus(adbc.StatusInvalidArgument, "unknown %s %q", OptionIntervalType, v)
 }
 
 func parseDateMode(v string) (string, error) {
@@ -178,7 +203,7 @@ func parseDateMode(v string) (string, error) {
 	case DateModeDate32, "date":
 		return DateModeDate32, nil
 	}
-	return "", errStatus(adbc.StatusInvalidArgument, "oracle: unknown %s %q", OptionDateMode, v)
+	return "", errStatus(adbc.StatusInvalidArgument, "unknown %s %q", OptionDateType, v)
 }
 
 // connConfig is the resolved connection configuration.
@@ -206,9 +231,9 @@ var databaseOptions = map[string]struct{}{
 	OptionURI: {}, OptionUsername: {}, OptionPassword: {}, OptionHost: {}, OptionPort: {},
 	OptionServiceName: {}, OptionSID: {}, OptionTLS: {}, OptionTLSCACert: {}, OptionTLSSkipVerify: {},
 	OptionTLSServerName: {}, OptionWalletLocation: {}, OptionWalletPassword: {}, OptionCurrentSchema: {},
-	OptionConnectTimeout: {}, OptionApplicationName: {}, OptionBatchSize: {}, OptionPrefetchRows: {},
-	OptionTrace: {}, OptionMode: {}, OptionSessionTimeZone: {}, OptionNumberMode: {}, OptionIntervalMode: {},
-	OptionDateMode: {}, OptionBatchBytes: {}, OptionDisableOOB: {}, OptionUseExtensionTypes: {}, OptionNNE: {},
+	OptionConnectTimeoutSeconds: {}, OptionApplicationName: {}, OptionBatchSize: {}, OptionPrefetchRows: {},
+	OptionTrace: {}, OptionMode: {}, OptionSessionTimeZone: {}, OptionNumberType: {}, OptionIntervalType: {},
+	OptionDateType: {}, OptionBatchBytes: {}, OptionDisableOOB: {}, OptionUseExtensionTypes: {}, OptionNNE: {},
 	OptionNNEChecksum: {}, OptionNNEEncryptionAlgorithms: {}, OptionNNEChecksumAlgorithms: {}, OptionSDU: {},
 	OptionToken: {}, OptionAllow10gVerifier: {},
 }
@@ -219,7 +244,7 @@ var databaseOptions = map[string]struct{}{
 // adbc.ingest.*) are still accepted and ignored: generic tooling sets e.g.
 // adbc.connection.autocommit at the database level.
 func checkDatabaseOption(key string) error {
-	if _, ok := databaseOptions[key]; ok {
+	if _, ok := databaseOptions[canonicalOption(key)]; ok {
 		return nil
 	}
 	for _, prefix := range []string{"adbc.connection.", "adbc.statement.", "adbc.ingest."} {
@@ -231,6 +256,7 @@ func checkDatabaseOption(key string) error {
 }
 
 func parseOptions(opts map[string]string) (*connConfig, error) {
+	opts = canonicalOptions(opts)
 	// batchBytes defaults to 8 MiB so a single batch stays under common
 	// transport limits (e.g. Flight SQL's 16 MiB gRPC message cap) even
 	// for wide rows; set batch_bytes=0 for unlimited.
@@ -252,9 +278,9 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 			skipVerify = isTrue(v)
 		case "tls_server_name", "ssl_server_name":
 			serverName = v
-		case "wallet_location", "wallet":
+		case "tls_wallet_location", "wallet_location", "wallet":
 			walletLocation = v
-		case "wallet_password":
+		case "tls_wallet_password", "wallet_password":
 			walletPassword = v
 		case "service_name", "service":
 			cfg.ttc.ServiceName = v
@@ -266,7 +292,7 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 			cfg.ttc.ServerType = strings.ToLower(v)
 		case "schema", "current_schema", "currentschema":
 			cfg.ttc.CurrentSchema = v
-		case "connect_timeout", "logintimeout", "tcp_connect_timeout":
+		case "connect_timeout_seconds", "connect_timeout", "logintimeout", "tcp_connect_timeout":
 			d, err := parseTimeout(v)
 			if err != nil {
 				return err
@@ -277,13 +303,13 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 		case "batch_size":
 			n, err := strconv.Atoi(v)
 			if err != nil || n <= 0 {
-				return errStatus(adbc.StatusInvalidArgument, "oracle: invalid batch_size %q", v)
+				return errStatus(adbc.StatusInvalidArgument, "invalid batch_size %q", v)
 			}
 			cfg.batchSize = n
 		case "prefetch_rows", "arraysize":
 			n, err := strconv.Atoi(v)
 			if err != nil || n <= 0 {
-				return errStatus(adbc.StatusInvalidArgument, "oracle: invalid prefetch_rows %q", v)
+				return errStatus(adbc.StatusInvalidArgument, "invalid prefetch_rows %q", v)
 			}
 			cfg.prefetchRows = n
 		case "user", "username", "uid":
@@ -298,19 +324,19 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 			cfg.ttc.Mode = m
 		case "session_time_zone", "time_zone":
 			cfg.ttc.SessionTimeZone = v
-		case "number_mode":
+		case "number_type", "number_mode":
 			nm, err := parseNumberMode(v)
 			if err != nil {
 				return err
 			}
 			cfg.types.numberMode = nm
-		case "interval_mode":
+		case "interval_type", "interval_mode":
 			im, err := parseIntervalMode(v)
 			if err != nil {
 				return err
 			}
 			cfg.types.intervalMode = im
-		case "date_mode":
+		case "date_type", "date_mode":
 			dm, err := parseDateMode(v)
 			if err != nil {
 				return err
@@ -319,7 +345,7 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 		case "batch_bytes":
 			n, err := strconv.ParseInt(v, 10, 64)
 			if err != nil || n < 0 {
-				return errStatus(adbc.StatusInvalidArgument, "oracle: invalid batch_bytes %q", v)
+				return errStatus(adbc.StatusInvalidArgument, "invalid batch_bytes %q", v)
 			}
 			cfg.batchBytes = n
 		case "disable_oob":
@@ -349,7 +375,7 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 		case "sdu":
 			n, err := strconv.Atoi(v)
 			if err != nil || n < 512 {
-				return errStatus(adbc.StatusInvalidArgument, "oracle: invalid sdu %q", v)
+				return errStatus(adbc.StatusInvalidArgument, "invalid sdu %q", v)
 			}
 			cfg.ttc.SDU = uint32(n)
 		case "token":
@@ -357,7 +383,7 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 		case "trace":
 			cfg.trace = isTrue(v)
 		default:
-			return errStatus(adbc.StatusInvalidArgument, "oracle: unknown URI parameter %q", key)
+			return errStatus(adbc.StatusInvalidArgument, "unknown URI parameter %q", key)
 		}
 		return nil
 	}
@@ -372,14 +398,14 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 		case strings.Contains(raw, "://") && !strings.HasPrefix(strings.ToLower(raw), "tcp://") && !strings.HasPrefix(strings.ToLower(raw), "tcps://"):
 			u, err := url.Parse(raw)
 			if err != nil {
-				return nil, errStatus(adbc.StatusInvalidArgument, "oracle: invalid URI %q: %v", raw, err)
+				return nil, errStatus(adbc.StatusInvalidArgument, "invalid URI %q: %v", raw, err)
 			}
 			switch strings.ToLower(u.Scheme) {
 			case "oracle", "oracledb", "ora":
 			case "oracles", "oracle+tcps":
 				tlsEnabled = true
 			default:
-				return nil, errStatus(adbc.StatusInvalidArgument, "oracle: unsupported URI scheme %q (want oracle://)", u.Scheme)
+				return nil, errStatus(adbc.StatusInvalidArgument, "unsupported URI scheme %q (want oracle://)", u.Scheme)
 			}
 			h, p, err := net.SplitHostPort(u.Host)
 			if err != nil {
@@ -390,7 +416,7 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 			if p != "" {
 				port, err = strconv.Atoi(p)
 				if err != nil {
-					return nil, errStatus(adbc.StatusInvalidArgument, "oracle: invalid port %q", p)
+					return nil, errStatus(adbc.StatusInvalidArgument, "invalid port %q", p)
 				}
 			}
 			if u.User != nil {
@@ -415,7 +441,7 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 			// Easy Connect: [tcp[s]://]host[:port]/service[:server][?params]
 			m := easyConnectRe.FindStringSubmatch(raw)
 			if m == nil {
-				return nil, errStatus(adbc.StatusInvalidArgument, "oracle: cannot parse connect string %q", raw)
+				return nil, errStatus(adbc.StatusInvalidArgument, "cannot parse connect string %q", raw)
 			}
 			if strings.EqualFold(m[1], "tcps") {
 				tlsEnabled = true
@@ -431,7 +457,7 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 			if m[6] != "" {
 				q, err := url.ParseQuery(m[6])
 				if err != nil {
-					return nil, errStatus(adbc.StatusInvalidArgument, "oracle: invalid parameters in %q", raw)
+					return nil, errStatus(adbc.StatusInvalidArgument, "invalid parameters in %q", raw)
 				}
 				for key, vals := range q {
 					if err := setParam(key, vals[0]); err != nil {
@@ -454,7 +480,7 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 		case OptionPort:
 			p, err := strconv.Atoi(v)
 			if err != nil {
-				return nil, errStatus(adbc.StatusInvalidArgument, "oracle: invalid %s %q", k, v)
+				return nil, errStatus(adbc.StatusInvalidArgument, "invalid %s %q", k, v)
 			}
 			port = p
 		case OptionServiceName:
@@ -475,7 +501,7 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 			walletPassword = v
 		case OptionCurrentSchema:
 			cfg.ttc.CurrentSchema = v
-		case OptionConnectTimeout:
+		case OptionConnectTimeoutSeconds:
 			d, err := parseTimeout(v)
 			if err != nil {
 				return nil, err
@@ -486,13 +512,13 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 		case OptionBatchSize:
 			n, err := strconv.Atoi(v)
 			if err != nil || n <= 0 {
-				return nil, errStatus(adbc.StatusInvalidArgument, "oracle: invalid %s %q", k, v)
+				return nil, errStatus(adbc.StatusInvalidArgument, "invalid %s %q", k, v)
 			}
 			cfg.batchSize = n
 		case OptionPrefetchRows:
 			n, err := strconv.Atoi(v)
 			if err != nil || n <= 0 {
-				return nil, errStatus(adbc.StatusInvalidArgument, "oracle: invalid %s %q", k, v)
+				return nil, errStatus(adbc.StatusInvalidArgument, "invalid %s %q", k, v)
 			}
 			cfg.prefetchRows = n
 		case OptionTrace:
@@ -505,19 +531,19 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 			cfg.ttc.Mode = m
 		case OptionSessionTimeZone:
 			cfg.ttc.SessionTimeZone = v
-		case OptionNumberMode:
+		case OptionNumberType:
 			nm, err := parseNumberMode(v)
 			if err != nil {
 				return nil, err
 			}
 			cfg.types.numberMode = nm
-		case OptionIntervalMode:
+		case OptionIntervalType:
 			im, err := parseIntervalMode(v)
 			if err != nil {
 				return nil, err
 			}
 			cfg.types.intervalMode = im
-		case OptionDateMode:
+		case OptionDateType:
 			dm, err := parseDateMode(v)
 			if err != nil {
 				return nil, err
@@ -526,7 +552,7 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 		case OptionBatchBytes:
 			n, err := strconv.ParseInt(v, 10, 64)
 			if err != nil || n < 0 {
-				return nil, errStatus(adbc.StatusInvalidArgument, "oracle: invalid %s %q", k, v)
+				return nil, errStatus(adbc.StatusInvalidArgument, "invalid %s %q", k, v)
 			}
 			cfg.batchBytes = n
 		case OptionDisableOOB:
@@ -556,7 +582,7 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 		case OptionSDU:
 			n, err := strconv.Atoi(v)
 			if err != nil || n < 512 {
-				return nil, errStatus(adbc.StatusInvalidArgument, "oracle: invalid %s %q", k, v)
+				return nil, errStatus(adbc.StatusInvalidArgument, "invalid %s %q", k, v)
 			}
 			cfg.ttc.SDU = uint32(n)
 		case OptionToken:
@@ -571,13 +597,13 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 		cfg.ttc.Addresses = []ttc.Address{{Host: host, Port: port}}
 	}
 	if len(cfg.ttc.Addresses) == 0 {
-		return nil, errStatus(adbc.StatusInvalidArgument, "oracle: no host given (set %s or %s)", OptionURI, OptionHost)
+		return nil, errStatus(adbc.StatusInvalidArgument, "no host given (set %s or %s)", OptionURI, OptionHost)
 	}
 	if cfg.ttc.ServiceName == "" && cfg.ttc.SID == "" {
-		return nil, errStatus(adbc.StatusInvalidArgument, "oracle: no service name given (URI path, e.g. oracle://host:1521/FREEPDB1, or %s)", OptionServiceName)
+		return nil, errStatus(adbc.StatusInvalidArgument, "no service name given (URI path, e.g. oracle://host:1521/FREEPDB1, or %s)", OptionServiceName)
 	}
 	if cfg.ttc.Username == "" && cfg.ttc.Token == "" {
-		return nil, errStatus(adbc.StatusInvalidArgument, "oracle: no username given (set %s)", OptionUsername)
+		return nil, errStatus(adbc.StatusInvalidArgument, "no username given (set %s)", OptionUsername)
 	}
 	if cfg.prefetchRows == 0 {
 		cfg.prefetchRows = cfg.batchSize
@@ -599,11 +625,11 @@ func parseOptions(opts map[string]string) (*connConfig, error) {
 		if caCert != "" {
 			pem, err := os.ReadFile(caCert)
 			if err != nil {
-				return nil, errStatus(adbc.StatusInvalidArgument, "oracle: read CA cert %q: %v", caCert, err)
+				return nil, errStatus(adbc.StatusInvalidArgument, "read CA cert %q: %v", caCert, err)
 			}
 			pool := x509.NewCertPool()
 			if !pool.AppendCertsFromPEM(pem) {
-				return nil, errStatus(adbc.StatusInvalidArgument, "oracle: no certificates found in %q", caCert)
+				return nil, errStatus(adbc.StatusInvalidArgument, "no certificates found in %q", caCert)
 			}
 			tc.RootCAs = pool
 		}
@@ -726,7 +752,7 @@ func parseDescriptor(desc string, cfg *connConfig, tlsEnabled *bool) error {
 		cfg.ttc.ExtraConnectData = nil
 	}
 	if len(cfg.ttc.Addresses) == 0 {
-		return errStatus(adbc.StatusInvalidArgument, "oracle: connect descriptor has no (ADDRESS=(HOST=...)) entry")
+		return errStatus(adbc.StatusInvalidArgument, "connect descriptor has no (ADDRESS=(HOST=...)) entry")
 	}
 	return nil
 }
@@ -741,7 +767,7 @@ func loadWallet(tc *tls.Config, dir, password string) error {
 	}
 	pem, err := os.ReadFile(path)
 	if err != nil {
-		return errStatus(adbc.StatusInvalidArgument, "oracle: cannot read wallet %q: %v", path, err)
+		return errStatus(adbc.StatusInvalidArgument, "cannot read wallet %q: %v", path, err)
 	}
 	pool := x509.NewCertPool()
 	if pool.AppendCertsFromPEM(pem) {
@@ -751,7 +777,7 @@ func loadWallet(tc *tls.Config, dir, password string) error {
 		tc.Certificates = []tls.Certificate{cert}
 	} else if password != "" {
 		// Encrypted private keys are not supported by crypto/tls directly.
-		return errStatus(adbc.StatusNotImplemented, "oracle: password-protected wallet private keys are not supported; convert ewallet.pem to an unencrypted key")
+		return errStatus(adbc.StatusNotImplemented, "password-protected wallet private keys are not supported; convert ewallet.pem to an unencrypted key")
 	}
 	return nil
 }
@@ -775,7 +801,7 @@ func parseMode(v string) (uint32, error) {
 	case "sysrac":
 		return 0x8000000, nil
 	}
-	return 0, errStatus(adbc.StatusInvalidArgument, "oracle: unknown mode %q", v)
+	return 0, errStatus(adbc.StatusInvalidArgument, "unknown mode %q", v)
 }
 
 func parseNNELevel(v string) (int, error) {
@@ -789,7 +815,7 @@ func parseNNELevel(v string) (int, error) {
 	case "rejected", "off", "disabled", "none":
 		return tns.LevelRejected, nil
 	}
-	return 0, errStatus(adbc.StatusInvalidArgument, "oracle: unknown NNE level %q (accepted|requested|required|rejected)", v)
+	return 0, errStatus(adbc.StatusInvalidArgument, "unknown NNE level %q (accepted|requested|required|rejected)", v)
 }
 
 func parseNumberMode(v string) (string, error) {
@@ -803,7 +829,7 @@ func parseNumberMode(v string) (string, error) {
 	case NumberModeString, "text":
 		return NumberModeString, nil
 	}
-	return "", errStatus(adbc.StatusInvalidArgument, "oracle: unknown %s %q", OptionNumberMode, v)
+	return "", errStatus(adbc.StatusInvalidArgument, "unknown %s %q", OptionNumberType, v)
 }
 
 func fullVersionNum() uint32 {
@@ -828,13 +854,31 @@ func parseTimeout(v string) (time.Duration, error) {
 	if n, err := strconv.Atoi(v); err == nil {
 		return time.Duration(n) * time.Second, nil
 	}
+	if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 {
+		return time.Duration(f * float64(time.Second)), nil
+	}
 	d, err := time.ParseDuration(v)
 	if err != nil {
-		return 0, errStatus(adbc.StatusInvalidArgument, "oracle: invalid timeout %q: %v", v, err)
+		return 0, errStatus(adbc.StatusInvalidArgument, "invalid timeout %q: %v", v, err)
 	}
 	return d, nil
 }
 
+// errPrefix starts every error message, per the ADBC driver style guide's
+// `[driver] message` format; "oracle" is the driver's slug (its manifest
+// name, `install.adbc.gizmodata.com/oracle`).
+const errPrefix = "[oracle] "
+
+// driverMsg gives a message the driver's prefix, never twice. The rest of the
+// message is kept as it is: callers match the wire layer's text (the
+// adbc-install canary looks for "oracle: cannot connect to <host>:<port>").
+func driverMsg(msg string) string {
+	if strings.HasPrefix(msg, errPrefix) {
+		return msg
+	}
+	return errPrefix + msg
+}
+
 func errStatus(code adbc.Status, format string, args ...any) error {
-	return adbc.Error{Code: code, Msg: fmt.Sprintf(format, args...)}
+	return adbc.Error{Code: code, Msg: driverMsg(fmt.Sprintf(format, args...))}
 }

@@ -12,6 +12,7 @@
 [![PyPI version](https://badge.fury.io/py/adbc-driver-oracle.svg)](https://badge.fury.io/py/adbc-driver-oracle)
 [![PyPI Downloads](https://img.shields.io/pepy/dt/adbc-driver-oracle.svg)](https://pypi.org/project/adbc-driver-oracle/)
 [![ADBC conformance](https://img.shields.io/badge/ADBC-conformance%20suite%20passing-2ea44f.svg)](https://github.com/gizmodata/adbc-driver-oracle/blob/main/validation/README.md)
+[![Follows the ADBC driver style guide](https://img.shields.io/badge/ADBC%20style%20guide-conforms-2ea44f.svg)](https://adbc-drivers.org/building-drivers/style-guide.html)
 [![License](https://img.shields.io/github/license/gizmodata/adbc-driver-oracle)](LICENSE)
 [![Hardcharger](https://img.shields.io/badge/works%20with-Hardcharger%E2%84%A2-f15a24.svg)](https://gizmodata.com/hardcharger)
 
@@ -147,7 +148,7 @@ with dbapi.connect(
 
 `Cursor.fetch_record_batch()` returns a `pyarrow.RecordBatchReader` that
 pulls rows from the server one batch at a time. Memory stays bounded by
-`adbc.oracle.batch_size` even when the result is millions of rows:
+`oracle.query.batch_size` even when the result is millions of rows:
 
 ```python
 with conn.cursor() as cur:
@@ -201,13 +202,13 @@ ingest side. [Hardcharger](https://gizmodata.com/hardcharger) accepts messages u
 `max_ingest_message_bytes` (64 MiB by default), and Flight SQL targets usually cap gRPC
 messages at 16 MiB. The Oracle driver's batches fit both out of the box: a batch is
 capped at 65,536 rows (`batch_size`) **and** 8 MiB (`batch_bytes`), so even very wide
-tables stream through. Both knobs are tunable (URI parameter or `adbc.oracle.*` in
-`db_kwargs`):
+tables stream through. Both knobs are tunable (URI parameter, or `oracle.query.batch_size` /
+`oracle.query.batch_bytes` in `db_kwargs`):
 
 ```python
 src = oracle.connect(uri=oracle_uri + "?batch_bytes=4194304")   # smaller batches
 # or, equivalently:
-src = oracle.connect(uri=oracle_uri, db_kwargs={"adbc.oracle.batch_bytes": str(4 * 1024 * 1024)})
+src = oracle.connect(uri=oracle_uri, db_kwargs={"oracle.query.batch_bytes": str(4 * 1024 * 1024)})
 ```
 
 `batch_bytes=0` removes the byte cap (batches then bound only by `batch_size`
@@ -349,13 +350,13 @@ array-bound `INSERT`s, 5000 per round trip. Statement options
 
 | Statement option                     | Default    | Notes                                                          |
 |--------------------------------------|------------|----------------------------------------------------------------|
-| `adbc.oracle.ingest.batch_rows`      | `5000`     | Rows per array-bind `INSERT` round trip.                       |
-| `adbc.oracle.ingest.varchar_length`  | `4000`     | `VARCHAR2(n)` length for Arrow string columns in generated DDL. |
-| `adbc.oracle.ingest.string_type`     | `VARCHAR2` | `VARCHAR2`, `NVARCHAR2`, `CLOB` or `NCLOB` for string columns.  |
-| `adbc.oracle.ingest.raw_length`      | `2000`     | `RAW(n)` length for Arrow binary columns.                      |
-| `adbc.oracle.ingest.binary_type`     | `RAW`      | `RAW` or `BLOB` for binary columns.                            |
-| `adbc.oracle.ingest.struct_type`     | `JSON`     | `JSON` (21c+), `CLOB`, `VARCHAR2` or `BLOB` for `list` / `struct` / `map` columns (stored as JSON text). |
-| `adbc.oracle.ingest.tablespace`      | (default)  | `TABLESPACE` clause for tables created by ingest.              |
+| `oracle.ingest.batch_rows`      | `5000`     | Rows per array-bind `INSERT` round trip.                       |
+| `oracle.ingest.varchar_length`  | `4000`     | `VARCHAR2(n)` length for Arrow string columns in generated DDL. |
+| `oracle.ingest.string_type`     | `VARCHAR2` | `VARCHAR2`, `NVARCHAR2`, `CLOB` or `NCLOB` for string columns.  |
+| `oracle.ingest.raw_length`      | `2000`     | `RAW(n)` length for Arrow binary columns.                      |
+| `oracle.ingest.binary_type`     | `RAW`      | `RAW` or `BLOB` for binary columns.                            |
+| `oracle.ingest.struct_type`     | `JSON`     | `JSON` (21c+), `CLOB`, `VARCHAR2` or `BLOB` for `list` / `struct` / `map` columns (stored as JSON text). |
+| `oracle.ingest.tablespace`      | (default)  | `TABLESPACE` clause for tables created by ingest.              |
 
 Values larger than the server's maximum `VARCHAR2`/`RAW` size are bound
 as `LONG` / `LONG RAW`, so strings and blobs of any size load into
@@ -408,20 +409,20 @@ inlined, dates as ISO-8601 — so any Arrow consumer can read them without
 Oracle-specific type knowledge. `XMLType` columns come back as XML text
 and `MDSYS.SDO_GEOMETRY` as **GeoArrow WKB** (points, lines, polygons
 incl. rectangles, multi-geometries and collections, 2D/3D/4D; circular
-arcs are not supported). With `adbc.oracle.use_extension_types=true` the
+arcs are not supported). With `oracle.query.use_extension_types=true` the
 fields are annotated with Arrow extension types (`arrow.json`,
 `arrow.opaque` for XMLType, `geoarrow.wkb`) — pyarrow materialises them
 automatically:
 
 ```python
-with oracle.connect(uri=uri, db_kwargs={"adbc.oracle.use_extension_types": "true"}) as conn, conn.cursor() as cur:
+with oracle.connect(uri=uri, db_kwargs={"oracle.query.use_extension_types": "true"}) as conn, conn.cursor() as cur:
     cur.execute("SELECT name, address, boundary FROM sites")   # address is an object type, boundary SDO_GEOMETRY
     table = cur.fetch_arrow_table()
     table.schema.field("BOUNDARY").type   # binary with geoarrow.wkb metadata -> shapely.from_wkb(...)
 ```
 
 Nested Arrow columns (`list`, `struct`, `map`) are ingested as JSON text
-into `JSON` columns (21c+; `adbc.oracle.ingest.struct_type` selects
+into `JSON` columns (21c+; `oracle.ingest.struct_type` selects
 `CLOB`, `VARCHAR2` or `BLOB` instead).
 
 ### Native Network Encryption (NNE)
@@ -433,7 +434,7 @@ the connect handshake it runs the encryption / checksum negotiation
 (Diffie-Hellman key exchange) and then AES-encrypts and checksums every
 packet.
 
-The `adbc.oracle.nne` level follows Oracle's sqlnet semantics:
+The `oracle.nne` level follows Oracle's sqlnet semantics:
 
 - `accepted` (default) — encrypt only when the **server** asks for it:
   nothing changes against a server that doesn't, and a server that
@@ -454,7 +455,7 @@ with oracle.connect(uri="oracle://user:pw@exadata-scan:1521/PROD") as conn, conn
     cur.execute("SELECT * FROM sales.orders")   # every packet AES-encrypted + checksummed
 
 # Refuse to connect unless the channel is encrypted:
-oracle.connect(uri=uri, db_kwargs={"adbc.oracle.nne": "required"})
+oracle.connect(uri=uri, db_kwargs={"oracle.nne": "required"})
 ```
 
 Whether a session is actually protected is verifiable from the
@@ -463,9 +464,9 @@ application via two read-only connection options — and, server-side,
 crypto-checksumming service adapters when NNE is active:
 
 ```python
-with oracle.connect(uri=uri, db_kwargs={"adbc.oracle.nne": "required"}) as conn:
-    assert conn.adbc_connection.get_option(key="adbc.oracle.nne_active") == "true"
-    print(conn.adbc_connection.get_option(key="adbc.oracle.nne_algorithms"))  # e.g. AES256,SHA256
+with oracle.connect(uri=uri, db_kwargs={"oracle.nne": "required"}) as conn:
+    assert conn.adbc_connection.get_option(key="oracle.nne.active") == "true"
+    print(conn.adbc_connection.get_option(key="oracle.nne.algorithms"))  # e.g. AES256,SHA256
 ```
 
 Supported: AES-128/192/256 encryption and MD5 / SHA-1 / SHA-256 / SHA-384
@@ -483,7 +484,7 @@ as usual. Accounts whose **only** verifier is the pre-11g, DES-based 10g one
 opt in:
 
 ```python
-oracle.connect(uri=uri, db_kwargs={"adbc.oracle.allow_10g_verifier": "true"})
+oracle.connect(uri=uri, db_kwargs={"oracle.auth.allow_10g_verifier": "true"})
 # or on the URI: oracle://user:pass@host:1521/SERVICE?allow_10g_verifier=true
 ```
 
@@ -531,54 +532,69 @@ Oracle [Easy Connect](https://docs.oracle.com/en/database/oracle/oracle-database
 strings (`host:port/service`) and full `(DESCRIPTION=...)` TNS connect
 descriptors are accepted in place of the `oracle://` form.
 
-| Option                          | Default   | Notes                                                                 |
-|---------------------------------|-----------|-----------------------------------------------------------------------|
-| `adbc.uri`                      | —         | Pass as the `uri=` kwarg to `oracle.connect`.                         |
-| `username` / `password`         | (URI)     | Standard ADBC credential options; override the URI's `user:password`. |
-| `adbc.oracle.host`              | (URI)     | Database host.                                                        |
-| `adbc.oracle.port`              | `1521`    | Listener port.                                                        |
-| `adbc.oracle.service_name`      | (URI)     | Service name (e.g. `FREEPDB1`).                                       |
-| `adbc.oracle.sid`               | (none)    | SID, as an alternative to a service name.                             |
-| `adbc.oracle.tls`               | `false`   | `true` → TLS (`tcps`) transport.                                      |
-| `adbc.oracle.tls.ca_cert`       | (none)    | PEM CA bundle for verifying the server certificate.                   |
-| `adbc.oracle.tls.skip_verify`   | `false`   | `true` → skip server certificate verification.                        |
-| `adbc.oracle.tls.server_name`   | (host)    | Host name for certificate verification / SNI.                         |
-| `adbc.oracle.wallet_location`   | (none)    | Directory containing `ewallet.pem` (Autonomous Database wallet); implies TLS. mTLS works with an unencrypted key. |
-| `adbc.oracle.token`             | (none)    | OAuth / IAM bearer token instead of a password (TLS only).            |
-| `adbc.oracle.allow_10g_verifier` | `false`  | `true` → let accounts that have only a 10g (DES-based) password verifier log in; see [Password verifiers](#password-verifiers-12c-11g-legacy-10g). |
-| `adbc.oracle.mode`              | (none)    | `sysdba`, `sysoper`, `sysasm`, `sysbackup`, `sysdg`, `syskm`, `sysrac`. |
-| `adbc.oracle.connect_timeout`   | `30`      | Dial timeout, as seconds or a Go duration like `1.5s`.                |
-| `adbc.oracle.batch_size`        | `65536`   | Maximum rows per Arrow record batch.                                  |
-| `adbc.oracle.prefetch_rows`     | (batch size, max 65536) | Rows the server returns per fetch round trip.           |
-| `adbc.oracle.number_mode`       | `auto`    | `NUMBER` → Arrow policy: `auto`, `decimal`, `double`, `string` (see [Type mapping](#type-mapping)). |
-| `adbc.oracle.interval_mode`     | `monthdaynano` | `INTERVAL` → Arrow policy: `monthdaynano`, `duration` (DAY TO SECOND), `string` (ISO 8601). |
-| `adbc.oracle.date_mode`         | `timestamp` | `DATE` → `timestamp[s]` (keeps the time of day) or `date32`.        |
-| `adbc.oracle.batch_bytes`       | `8388608` | Approximate upper bound on bytes per Arrow record batch (8 MiB default keeps batches under Flight SQL's 16 MiB gRPC cap; 0 = only `batch_size` applies). |
-| `adbc.oracle.disable_oob`       | `false`   | Disable out-of-band (TCP urgent) breaks used for cancellation; falls back to in-band markers. |
-| `adbc.oracle.nne`               | `accepted` | Native Network Encryption / data integrity: `accepted`, `requested`, `required` (fails closed if not negotiated), `rejected`. |
-| `adbc.oracle.nne_checksum`      | (=`nne`)  | Data-integrity level, if different from `nne`.                        |
-| `adbc.oracle.nne_encryption_algorithms` | (all AES) | Comma-separated encryption preference, e.g. `AES256,AES192`. |
-| `adbc.oracle.nne_checksum_algorithms`   | (all)     | Comma-separated checksum preference, e.g. `SHA512,SHA256`. |
-| `adbc.oracle.use_extension_types` | `false` | Annotate JSON / object (`arrow.json`), XMLType (`arrow.opaque`) and SDO_GEOMETRY (`geoarrow.wkb`) columns with Arrow extension-type metadata. |
-| `adbc.oracle.session_time_zone` | `+00:00`  | Session `TIME_ZONE`; `TIMESTAMP WITH LOCAL TIME ZONE` values are returned in it. |
-| `adbc.oracle.sdu`               | (server)  | Requested session data unit (packet size) in bytes.                   |
-| `adbc.oracle.application_name`  | (executable name) | Program name reported to the server (`V$SESSION.PROGRAM`, `CLIENT_PROGRAM_NAME`). |
-| `adbc.oracle.current_schema`    | (none)    | Sets the session's current schema after connecting.                   |
-| `adbc.oracle.trace`             | `false`   | `true` → hex-dump TNS packets to stderr.                              |
+Driver options follow the [ADBC driver style guide](https://adbc-drivers.org/building-drivers/style-guide.html):
+`oracle.<option>`, grouped as `oracle.query.*` (results and types), `oracle.ingest.*` (bulk
+ingest, [below](#bulk-ingest-arrow--oracle)), `oracle.tls.*`, `oracle.auth.*`, `oracle.session.*`
+and `oracle.nne.*`. Standard ADBC options (`uri`, `username`, `password`, `adbc.connection.*`,
+`adbc.ingest.*`, ...) keep their names.
 
-All of these are also accepted as `?key=value` URI query parameters
-(without the `adbc.oracle.` prefix, e.g. `?tls=true&number_mode=decimal`).
+| Option                               | Default   | Notes                                                                 |
+|--------------------------------------|-----------|-----------------------------------------------------------------------|
+| `uri`                                | —         | Pass as the `uri=` kwarg to `oracle.connect`.                         |
+| `username` / `password`              | (URI)     | Standard ADBC credential options; override the URI's `user:password`. |
+| `oracle.host`                        | (URI)     | Database host.                                                        |
+| `oracle.port`                        | `1521`    | Listener port.                                                        |
+| `oracle.service_name`                | (URI)     | Service name (e.g. `FREEPDB1`).                                       |
+| `oracle.sid`                         | (none)    | SID, as an alternative to a service name.                             |
+| `oracle.connect_timeout_seconds`     | `30`      | Dial timeout in seconds (fractions and Go durations like `1.5s` work too). |
+| `oracle.tls`                         | `false`   | `true` → TLS (`tcps`) transport.                                      |
+| `oracle.tls.ca_cert`                 | (none)    | PEM CA bundle for verifying the server certificate.                   |
+| `oracle.tls.skip_verify`             | `false`   | `true` → skip server certificate verification.                        |
+| `oracle.tls.server_name`             | (host)    | Host name for certificate verification / SNI.                         |
+| `oracle.tls.wallet_location`         | (none)    | Directory containing `ewallet.pem` (Autonomous Database wallet); implies TLS. mTLS works with an unencrypted key. |
+| `oracle.tls.wallet_password`         | (none)    | Password of the wallet's private key (write-only).                    |
+| `oracle.auth.token`                  | (none)    | OAuth / IAM bearer token instead of a password (TLS only; write-only). |
+| `oracle.auth.mode`                   | (none)    | `sysdba`, `sysoper`, `sysasm`, `sysbackup`, `sysdg`, `syskm`, `sysrac`. |
+| `oracle.auth.allow_10g_verifier`     | `false`   | `true` → let accounts that have only a 10g (DES-based) password verifier log in; see [Password verifiers](#password-verifiers-12c-11g-legacy-10g). |
+| `oracle.query.batch_size`            | `65536`   | Maximum rows per Arrow record batch.                                  |
+| `oracle.query.batch_bytes`           | `8388608` | Approximate upper bound on bytes per Arrow record batch (8 MiB default keeps batches under Flight SQL's 16 MiB gRPC cap; 0 = only `batch_size` applies). |
+| `oracle.query.prefetch_rows`         | (batch size, max 65536) | Rows the server returns per fetch round trip.           |
+| `oracle.query.number_type`           | `auto`    | `NUMBER` → Arrow policy: `auto`, `decimal`, `double`, `string` (see [Type mapping](#type-mapping)). |
+| `oracle.query.interval_type`         | `monthdaynano` | `INTERVAL` → Arrow policy: `monthdaynano`, `duration` (DAY TO SECOND), `string` (ISO 8601). |
+| `oracle.query.date_type`             | `timestamp` | `DATE` → `timestamp[s]` (keeps the time of day) or `date32`.        |
+| `oracle.query.use_extension_types`   | `false`   | Annotate JSON / object (`arrow.json`), XMLType (`arrow.opaque`) and SDO_GEOMETRY (`geoarrow.wkb`) columns with Arrow extension-type metadata. |
+| `oracle.session.time_zone`           | `+00:00`  | Session `TIME_ZONE`; `TIMESTAMP WITH LOCAL TIME ZONE` values are returned in it. |
+| `oracle.session.application_name`    | (executable name) | Program name reported to the server (`V$SESSION.PROGRAM`, `CLIENT_PROGRAM_NAME`). |
+| `oracle.session.current_schema`      | (none)    | Sets the session's current schema after connecting.                   |
+| `oracle.nne`                         | `accepted` | Native Network Encryption / data integrity: `accepted`, `requested`, `required` (fails closed if not negotiated), `rejected`. |
+| `oracle.nne.checksum`                | (=`oracle.nne`) | Data-integrity level, if different from `oracle.nne`.           |
+| `oracle.nne.encryption_algorithms`   | (all AES) | Comma-separated encryption preference, e.g. `AES256,AES192`.          |
+| `oracle.nne.checksum_algorithms`     | (all)     | Comma-separated checksum preference, e.g. `SHA512,SHA256`.            |
+| `oracle.disable_oob`                 | `false`   | Disable out-of-band (TCP urgent) breaks used for cancellation; falls back to in-band markers. |
+| `oracle.sdu`                         | (server)  | Requested session data unit (packet size) in bytes.                   |
+| `oracle.trace`                       | `false`   | `true` → hex-dump TNS packets to stderr.                              |
+
+All of these are also accepted as `?key=value` URI query parameters, by the last part
+of the name (e.g. `?tls=true&number_type=decimal&connect_timeout_seconds=5`).
 A database option the driver doesn't know is refused with `NOT_IMPLEMENTED`, so a
 misspelt key fails instead of being ignored; standard ADBC connection, statement and
 ingest keys (`adbc.connection.*`, `adbc.statement.*`, `adbc.ingest.*`) set at the
 database level are still accepted.
-After connecting, `adbc.oracle.batch_size`, `adbc.oracle.batch_bytes`,
-`adbc.oracle.prefetch_rows`, `adbc.oracle.number_mode`,
-`adbc.oracle.interval_mode`, `adbc.oracle.date_mode` and the end-to-end tracing attributes
-`adbc.oracle.module` / `.action` / `.client_info` / `.client_identifier`
-can be changed per connection. The read-only connection options
-`adbc.oracle.nne_active` / `adbc.oracle.nne_algorithms` report whether the
-session is protected by Native Network Encryption and with what.
+After connecting, `oracle.query.batch_size`, `oracle.query.batch_bytes`,
+`oracle.query.prefetch_rows`, `oracle.query.number_type`, `oracle.query.interval_type`,
+`oracle.query.date_type`, `oracle.query.use_extension_types` and the end-to-end tracing
+attributes `oracle.session.module` / `oracle.session.action` / `oracle.session.client_info` /
+`oracle.session.client_identifier` can be changed per connection. The read-only connection
+options `oracle.nne.active` / `oracle.nne.algorithms` report whether the session is protected
+by Native Network Encryption and with what.
+
+**Option names before 1.1.0.** The driver's options used to be named `adbc.oracle.*`.
+Those names still work, for setting and reading, but the first use of each one in a process
+prints one line to stderr, `[oracle] option "adbc.oracle.batch_size" is deprecated; use
+"oracle.query.batch_size"` (key names only, never the value). When both names are given,
+the new one wins. The old names will be removed in 2.0.0. The full list is in the
+[CHANGELOG](https://github.com/gizmodata/adbc-driver-oracle/blob/main/CHANGELOG.md#110---2026-11-20)
+and in Go as `oracle.DeprecatedOptions`.
 
 The URI is its own kwarg; everything else goes through `db_kwargs`:
 
@@ -590,8 +606,8 @@ oracle.connect(
     db_kwargs={
         "username": "app",
         "password": "s3cret",
-        "adbc.oracle.tls": "true",
-        "adbc.oracle.tls.ca_cert": "/etc/ssl/certs/corp-ca.pem",
+        "oracle.tls": "true",
+        "oracle.tls.ca_cert": "/etc/ssl/certs/corp-ca.pem",
     },
 )
 ```
@@ -639,7 +655,7 @@ driver = "oracle"
 uri = "oracle://db.example.com:2484/PROD"
 username = "app"
 password = "{{ env_var(ORACLE_PASSWORD) }}"
-"adbc.oracle.tls" = true
+"oracle.tls" = true
 ```
 
 then connect from any ADBC driver-manager binding:
@@ -678,7 +694,7 @@ for reader.Next() {
 
 ## Type mapping
 
-Reads (`adbc.oracle.number_mode=auto`, the default):
+Reads (`oracle.query.number_type=auto`, the default):
 
 | Oracle type                              | Arrow type                                   |
 |------------------------------------------|----------------------------------------------|
@@ -688,11 +704,11 @@ Reads (`adbc.oracle.number_mode=auto`, the default):
 | `BINARY_FLOAT` / `BINARY_DOUBLE`         | `float32` / `float64`                        |
 | `CHAR`, `VARCHAR2`, `NCHAR`, `NVARCHAR2`, `LONG`, `CLOB`, `NCLOB` | `utf8`               |
 | `RAW`, `LONG RAW`, `BLOB`                | `binary`                                     |
-| `DATE`                                   | `timestamp[s]` (`date32` with `date_mode=date32`) |
+| `DATE`                                   | `timestamp[s]` (`date32` with `oracle.query.date_type=date32`) |
 | `TIMESTAMP(n)`                           | `timestamp[s / ms / us / ns]` by fractional-second precision n (n ≥ 7: nanoseconds, which only reach 1677-09-21 to 2262-04-11; a value outside that range is refused with `INVALID_DATA`, so `CAST` it to `TIMESTAMP(6)`) |
 | `TIMESTAMP WITH TIME ZONE` / `WITH LOCAL TIME ZONE` | `timestamp[…, tz=UTC]` (the instant; the original offset is not kept) |
-| `INTERVAL DAY TO SECOND`                 | `month_day_nano_interval`; `duration[unit by precision]` with `interval_mode=duration`; ISO-8601 `utf8` (`P1DT2H3M4.5S`) with `interval_mode=string` |
-| `INTERVAL YEAR TO MONTH`                 | `month_day_nano_interval`; ISO-8601 `utf8` (`P2Y3M`) with `interval_mode=string` |
+| `INTERVAL DAY TO SECOND`                 | `month_day_nano_interval`; `duration[unit by precision]` with `oracle.query.interval_type=duration`; ISO-8601 `utf8` (`P1DT2H3M4.5S`) with `oracle.query.interval_type=string` |
+| `INTERVAL YEAR TO MONTH`                 | `month_day_nano_interval`; ISO-8601 `utf8` (`P2Y3M`) with `oracle.query.interval_type=string` |
 | `ROWID` / `UROWID`                       | `utf8`                                       |
 | `JSON` (21c+)                            | `utf8` — native OSON decoded to JSON text client-side |
 | `BOOLEAN` (23ai)                         | `bool`                                       |
@@ -700,7 +716,7 @@ Reads (`adbc.oracle.number_mode=auto`, the default):
 | `XMLTYPE`                                | `utf8` XML text (`arrow.opaque` extension)   |
 | `MDSYS.SDO_GEOMETRY`                     | `binary` WKB (`geoarrow.wkb` extension)      |
 
-`number_mode=decimal` maps every `NUMBER` to `decimal128` (`(38,10)` when
+`oracle.query.number_type=decimal` maps every `NUMBER` to `decimal128` (`(38,10)` when
 the precision is unknown), `double` maps all of them to `float64`, and
 `string` returns the exact decimal text — useful when precision matters
 and a column's declared scale can't be trusted.

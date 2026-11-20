@@ -37,7 +37,7 @@ def _drop_type_quietly(cur, name):
 def test_object_and_collection_columns_as_json(oracle_server, table_name):
     sfx = uuid.uuid4().hex[:8].upper()
     addr, addrs, person = f"ADBC_ADDR_{sfx}", f"ADBC_ADDRS_{sfx}", f"ADBC_PERSON_{sfx}"
-    with _connect(oracle_server, **{"adbc.oracle.use_extension_types": "true"}) as conn, conn.cursor() as cur:
+    with _connect(oracle_server, **{"oracle.query.use_extension_types": "true"}) as conn, conn.cursor() as cur:
         cur.execute(f"CREATE TYPE {addr} AS OBJECT (street VARCHAR2(40), zip NUMBER(5), since DATE)")
         cur.execute(f"CREATE TYPE {addrs} AS VARRAY(5) OF {addr}")
         cur.execute(
@@ -107,7 +107,7 @@ def test_sdo_geometry_as_geoarrow_wkb(spatial_uri, table_name):
     import adbc_driver_oracle.dbapi as oracle
 
     shapely = pytest.importorskip("shapely")
-    with oracle.connect(uri=spatial_uri, db_kwargs={"adbc.oracle.use_extension_types": "true"}) as conn, conn.cursor() as cur:
+    with oracle.connect(uri=spatial_uri, db_kwargs={"oracle.query.use_extension_types": "true"}) as conn, conn.cursor() as cur:
         cur.execute(f"CREATE TABLE {table_name} (id NUMBER, g MDSYS.SDO_GEOMETRY)")
         try:
             cur.execute(f"INSERT INTO {table_name} VALUES (1, SDO_GEOMETRY(2001, 4326, SDO_POINT_TYPE(-122.4, 37.8, NULL), NULL, NULL))")

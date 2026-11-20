@@ -25,7 +25,7 @@ def test_stream_oracle_table_into_hardcharger(oracle_server, hardcharger_server,
 
     rows = 250_000
     with oracle.connect(
-        uri=oracle_server.uri, db_kwargs={"adbc.oracle.batch_size": "65536"}
+        uri=oracle_server.uri, db_kwargs={"oracle.query.batch_size": "65536"}
     ) as src, src.cursor() as src_cur:
         drop_table_quietly(src_cur, table_name)
         src_cur.execute(

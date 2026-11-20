@@ -76,8 +76,9 @@ var drv = oracle.NewDriver(mallocator.NewMallocator())
 // since internal state of driver is unknown
 var globalPoison atomic.Bool
 
-const errPrefix = "[Oracle] "
-const logLevelEnvVar = "ADBC_DRIVER_DB2_LOG_LEVEL"
+// The driver slug, as the ADBC driver style guide asks (`[driver] message`).
+const errPrefix = "[oracle] "
+const logLevelEnvVar = "ADBC_DRIVER_ORACLE_LOG_LEVEL"
 
 func setErr(err *C.struct_AdbcError, format string, vals ...interface{}) {
 	if err == nil {
@@ -204,8 +205,7 @@ func initLoggingFromEnv(db adbc.Database) {
 		logLevel = slog.LevelDebug
 	case "info":
 		logLevel = slog.LevelInfo
-	case "warn":
-	case "warning":
+	case "warn", "warning":
 		logLevel = slog.LevelWarn
 	case "error":
 		logLevel = slog.LevelError

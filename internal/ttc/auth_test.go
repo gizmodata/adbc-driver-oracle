@@ -194,7 +194,7 @@ func TestO3LogonRefusedWithoutOptIn(t *testing.T) {
 	if m.sessionKey != "" || m.encodedPassword != "" || m.comboKey != nil {
 		t.Fatal("key material was derived without the opt-in")
 	}
-	for _, want := range []string{"adbc.oracle.allow_10g_verifier=true", "10g (DES-based)", "man-in-the-middle"} {
+	for _, want := range []string{"oracle.auth.allow_10g_verifier=true", "10g (DES-based)", "man-in-the-middle"} {
 		if !strings.Contains(Err10gVerifierNotAllowed.Error(), want) {
 			t.Errorf("error message lacks %q", want)
 		}

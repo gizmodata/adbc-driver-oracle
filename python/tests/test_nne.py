@@ -44,7 +44,7 @@ def test_required_server_without_nne_gives_clear_error():
     import adbc_driver_oracle.dbapi as oracle
 
     with pytest.raises(Exception, match="Native Network Encryption|ORA-12660"):
-        with oracle.connect(uri=_nne_uri(), db_kwargs={"adbc.oracle.nne": "rejected"}) as conn, conn.cursor() as cur:
+        with oracle.connect(uri=_nne_uri(), db_kwargs={"oracle.nne": "rejected"}) as conn, conn.cursor() as cur:
             cur.execute("SELECT 1 FROM DUAL")
 
 
@@ -55,10 +55,10 @@ def test_client_required_encrypts_against_accepted_server(oracle_server):
     import adbc_driver_oracle.dbapi as oracle
 
     with oracle.connect(
-        uri=oracle_server.uri, db_kwargs={"adbc.oracle.nne": "required"}
+        uri=oracle_server.uri, db_kwargs={"oracle.nne": "required"}
     ) as conn, conn.cursor() as cur:
-        assert conn.adbc_connection.get_option(key="adbc.oracle.nne_active") == "true"
-        assert "AES" in conn.adbc_connection.get_option(key="adbc.oracle.nne_algorithms")
+        assert conn.adbc_connection.get_option(key="oracle.nne.active") == "true"
+        assert "AES" in conn.adbc_connection.get_option(key="oracle.nne.algorithms")
         cur.execute("SELECT LEVEL AS n FROM DUAL CONNECT BY LEVEL <= 5000")
         assert cur.fetch_arrow_table().num_rows == 5000
 
@@ -69,8 +69,8 @@ def test_nne_introspection_default(oracle_server):
     import adbc_driver_oracle.dbapi as oracle
 
     with oracle.connect(uri=oracle_server.uri) as conn:
-        assert conn.adbc_connection.get_option(key="adbc.oracle.nne_active") == "false"
-        assert conn.adbc_connection.get_option(key="adbc.oracle.nne_algorithms") == ""
+        assert conn.adbc_connection.get_option(key="oracle.nne.active") == "false"
+        assert conn.adbc_connection.get_option(key="oracle.nne.algorithms") == ""
 
 
 def test_wire_bytes_are_encrypted_with_required(oracle_server):
@@ -133,7 +133,7 @@ def test_wire_bytes_are_encrypted_with_required(oracle_server):
     cleartext = run_via_proxy(db_kwargs={})
     assert marker.encode() in cleartext, "sanity: default session should be cleartext here"
 
-    encrypted = run_via_proxy(db_kwargs={"adbc.oracle.nne": "required"})
+    encrypted = run_via_proxy(db_kwargs={"oracle.nne": "required"})
     assert marker.encode() not in encrypted, "required session leaked SQL text on the wire"
     assert b"8675309" not in encrypted, "required session leaked result data on the wire"
 
@@ -148,7 +148,7 @@ def test_required_fails_closed_against_rejecting_server():
     if not uri:
         pytest.skip(reason="ADBC_ORACLE_NNE_REJECTED_URI not set (needs an NNE-rejecting Oracle)")
     with pytest.raises(Exception, match="ORA-12660"):
-        with oracle.connect(uri=uri, db_kwargs={"adbc.oracle.nne": "required"}):
+        with oracle.connect(uri=uri, db_kwargs={"oracle.nne": "required"}):
             pass
 
 
@@ -158,9 +158,9 @@ def test_nne_algorithm_selection():
     with oracle.connect(
         uri=_nne_uri(),
         db_kwargs={
-            "adbc.oracle.nne": "required",
-            "adbc.oracle.nne_encryption_algorithms": "AES256",
-            "adbc.oracle.nne_checksum_algorithms": "SHA512",
+            "oracle.nne": "required",
+            "oracle.nne.encryption_algorithms": "AES256",
+            "oracle.nne.checksum_algorithms": "SHA512",
         },
     ) as conn, conn.cursor() as cur:
         cur.execute("SELECT 42 FROM DUAL")

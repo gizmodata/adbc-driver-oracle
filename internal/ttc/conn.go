@@ -215,13 +215,13 @@ func Dial(ctx context.Context, cfg *Config) (*Conn, error) {
 
 var (
 	errRetryWithANO = errors.New("oracle: retry connection with Native Network Encryption")
-	errNNERequired  = &Error{Code: 12660, Message: "ORA-12660: the server requires Native Network Encryption / data integrity; enable it with adbc.oracle.nne=accepted (or higher), or connect over TLS (tcps)"}
+	errNNERequired  = &Error{Code: 12660, Message: "ORA-12660: the server requires Native Network Encryption / data integrity; enable it with oracle.nne=accepted (or higher), or connect over TLS (tcps)"}
 	// errNNENotNegotiated fails a connection closed when the client
 	// required encryption/integrity but the negotiation did not produce it.
-	errNNENotNegotiated = &Error{Code: 12660, Message: "ORA-12660: Native Network Encryption / data integrity is required by the client configuration but was not negotiated with this server; refusing to send data in cleartext (connect over TLS, or lower adbc.oracle.nne)"}
+	errNNENotNegotiated = &Error{Code: 12660, Message: "ORA-12660: Native Network Encryption / data integrity is required by the client configuration but was not negotiated with this server; refusing to send data in cleartext (connect over TLS, or lower oracle.nne)"}
 )
 
-// verifyNNERequirement enforces adbc.oracle.nne=required (and the
+// verifyNNERequirement enforces oracle.nne=required (and the
 // checksum equivalent) after the connect handshake: if the required
 // protection is not active on the transport the connection must fail
 // rather than proceed in cleartext. A TLS channel already provides both
