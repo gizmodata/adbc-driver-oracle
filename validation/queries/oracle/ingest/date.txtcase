@@ -20,7 +20,7 @@ sql-type-name = "DATE"
 field-type-name = "DATE"
 caveats = [
     "Oracle has no 64-bit integer type: the int64 `idx` column becomes NUMBER(19), read back as decimal128(19, 0).",
-    "Oracle DATE carries a time of day: it is read back as timestamp[s] (date32 with adbc.oracle.date_mode=date32).",
+    "Oracle DATE carries a time of day: it is read back as timestamp[s] (date32 with oracle.query.date_type=date32).",
 ]
 
 // part: expected_schema

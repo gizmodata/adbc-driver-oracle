@@ -51,14 +51,17 @@ test = [
     "pandas >=3.1.1; python_version >= '3.11'",
     "pandas >=2.3.3; python_version < '3.11'",
     "pytest >=9.2.0",
-    "duckdb >=2.0.0; python_version >= '3.11'",
+    # <2.0.1: Query.Farm has no adbc_scanner build for DuckDB 2.0.1 yet (404 on every platform,
+    # 2026-11-20, the day 2.0.1 came out), which test_adbc_scanner.py installs. Lift it once
+    # https://duckdb-extensions.query.farm/v2.0.1/linux_amd64/adbc_scanner.duckdb_extension.gz exists.
+    "duckdb >=2.0.0,<2.0.1; python_version >= '3.11'",
     "duckdb >=1.5.6; python_version < '3.11'",
     "shapely >=2.2.0; python_version >= '3.11'",
     "shapely >=2.1.2; python_version < '3.11'",
 ]
 # Oracle -> Hardcharger integration tests (https://gizmodata.com/hardcharger): the
 # server package and its ADBC client. The client needs Python 3.11 or later.
-hardcharger = ["hardcharger[adbc] >=2.10.0; python_version >= '3.11'"]
+hardcharger = ["hardcharger[adbc] >=2.13.3; python_version >= '3.11'"]
 
 [project.urls]
 homepage = "https://github.com/gizmodata/adbc-driver-oracle"
@@ -66,7 +69,7 @@ repository = "https://github.com/gizmodata/adbc-driver-oracle"
 issues = "https://github.com/gizmodata/adbc-driver-oracle/issues"
 
 [build-system]
-requires = ["setuptools >= 77.0.0"]
+requires = ["setuptools >= 84.2.1"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]

@@ -20,7 +20,7 @@ sql-type-name = "NUMBER(2,-2)"
 field-type-name = "NUMBER"
 caveats = [
     "Oracle has no 64-bit integer type: the int64 `idx` column becomes NUMBER(19), read back as decimal128(19, 0).",
-    "NUMBER with a negative scale is read back as float64 (number_mode=auto).",
+    "NUMBER with a negative scale is read back as float64 (oracle.query.number_type=auto).",
 ]
 
 // part: expected_schema

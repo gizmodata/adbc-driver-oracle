@@ -38,7 +38,9 @@ func (d *driverImpl) NewDatabaseWithContext(_ context.Context, opts map[string]s
 			return nil, err
 		}
 	}
-	return &databaseImpl{alloc: d.alloc, opts: cloneMap(opts)}, nil
+	// Stored under the current names; a new name given with its old one in
+	// the same map wins.
+	return &databaseImpl{alloc: d.alloc, opts: canonicalOptions(opts)}, nil
 }
 
 type databaseImpl struct {
@@ -55,7 +57,9 @@ func (d *databaseImpl) SetOptions(opts map[string]string) error {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	for k, v := range opts {
+	// One call: a new name given with its old one wins; against earlier
+	// calls, last write wins (everything is stored under the current name).
+	for k, v := range canonicalOptions(opts) {
 		d.opts[k] = v
 	}
 	return nil
@@ -152,7 +156,9 @@ func (c *connectionImpl) Rollback(ctx context.Context) error {
 }
 
 func (c *connectionImpl) SetOption(key, value string) error {
-	switch key {
+	// Old names act as their new ones; messages quote the key as the caller wrote it.
+	name := canonicalOption(key)
+	switch name {
 	case adbc.OptionKeyAutoCommit:
 		switch value {
 		case adbc.OptionValueEnabled:
@@ -204,21 +210,21 @@ func (c *connectionImpl) SetOption(key, value string) error {
 		}
 		c.cfg.prefetchRows = n
 		return nil
-	case OptionNumberMode:
+	case OptionNumberType:
 		nm, err := parseNumberMode(value)
 		if err != nil {
 			return err
 		}
 		c.cfg.types.numberMode = nm
 		return nil
-	case OptionIntervalMode:
+	case OptionIntervalType:
 		im, err := parseIntervalMode(value)
 		if err != nil {
 			return err
 		}
 		c.cfg.types.intervalMode = im
 		return nil
-	case OptionDateMode:
+	case OptionDateType:
 		dm, err := parseDateMode(value)
 		if err != nil {
 			return err
@@ -235,14 +241,14 @@ func (c *connectionImpl) SetOption(key, value string) error {
 	case OptionUseExtensionTypes:
 		c.cfg.types.useExtensionTypes = isTrue(value)
 		return nil
-	case "adbc.oracle.module", "adbc.oracle.action", "adbc.oracle.client_info", "adbc.oracle.client_identifier":
+	case OptionSessionModule, OptionSessionAction, OptionSessionClientInfo, OptionSessionClientIdentifier:
 		var which uint8
-		switch key {
-		case "adbc.oracle.module":
+		switch name {
+		case OptionSessionModule:
 			which = 1
-		case "adbc.oracle.action":
+		case OptionSessionAction:
 			which = 2
-		case "adbc.oracle.client_info":
+		case OptionSessionClientInfo:
 			which = 4
 		default:
 			which = 8
@@ -254,7 +260,9 @@ func (c *connectionImpl) SetOption(key, value string) error {
 }
 
 func (c *connectionImpl) GetOption(key string) (string, error) {
-	switch key {
+	// Old names act as their new ones; messages quote the key as the caller wrote it.
+	name := canonicalOption(key)
+	switch name {
 	case adbc.OptionKeyAutoCommit:
 		if c.autoCommit {
 			return adbc.OptionValueEnabled, nil
@@ -268,11 +276,11 @@ func (c *connectionImpl) GetOption(key string) (string, error) {
 		return strconv.Itoa(c.cfg.batchSize), nil
 	case OptionPrefetchRows:
 		return strconv.Itoa(c.cfg.prefetchRows), nil
-	case OptionNumberMode:
+	case OptionNumberType:
 		return c.cfg.types.numberMode, nil
-	case OptionIntervalMode:
+	case OptionIntervalType:
 		return c.cfg.types.intervalMode, nil
-	case OptionDateMode:
+	case OptionDateType:
 		return c.cfg.types.dateMode, nil
 	case OptionBatchBytes:
 		return strconv.FormatInt(c.cfg.batchBytes, 10), nil
@@ -297,7 +305,7 @@ func (c *connectionImpl) GetOption(key string) (string, error) {
 }
 
 func (c *connectionImpl) ReadPartition(context.Context, []byte) (array.RecordReader, error) {
-	return nil, errStatus(adbc.StatusNotImplemented, "ReadPartition")
+	return nil, errStatus(adbc.StatusNotImplemented, "ReadPartition is not supported")
 }
 
 // execNoResult executes a statement without a result set.
@@ -364,7 +372,9 @@ func (s *statementImpl) SetSqlQuery(sql string) error {
 }
 
 func (s *statementImpl) SetOption(key, value string) error {
-	switch key {
+	// Old names act as their new ones; messages quote the key as the caller wrote it.
+	name := canonicalOption(key)
+	switch name {
 	case adbc.OptionKeyIngestTargetTable:
 		s.targetTable = value
 	case adbc.OptionValueIngestTargetDBSchema:
@@ -434,7 +444,7 @@ func (s *statementImpl) SetOption(key, value string) error {
 }
 
 func (s *statementImpl) SetSubstraitPlan([]byte) error {
-	return errStatus(adbc.StatusNotImplemented, "Substrait")
+	return errStatus(adbc.StatusNotImplemented, "Substrait plans are not supported")
 }
 
 // Prepare parses the SQL and, for queries, describes the result set so

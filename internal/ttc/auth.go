@@ -48,7 +48,7 @@ const (
 // not opted in with Config.Allow10gVerifier. Nothing derived from the
 // password has been sent when it is returned.
 var Err10gVerifierNotAllowed = errors.New("oracle: the server offered only a 10g (DES-based) password verifier " +
-	"for this account, which is refused by default; set adbc.oracle.allow_10g_verifier=true to allow it. " +
+	"for this account, which is refused by default; set oracle.auth.allow_10g_verifier=true to allow it. " +
 	"The 10g hash is weak (DES, case-insensitive, salted only by the user name), and a man-in-the-middle " +
 	"on a connection without TLS could request it to get an offline-crackable hash of the password. " +
 	"Resetting the account's password on a current server gives it a 12c verifier instead")

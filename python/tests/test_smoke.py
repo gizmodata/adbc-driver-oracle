@@ -92,7 +92,7 @@ def test_readme_streaming_large_result_set(oracle_server):
 
     with oracle.connect(
         uri=oracle_server.uri,
-        db_kwargs={"adbc.oracle.batch_size": "4096"},
+        db_kwargs={"oracle.query.batch_size": "4096"},
     ) as conn, conn.cursor() as cur:
         cur.execute("SELECT LEVEL AS n FROM DUAL CONNECT BY LEVEL <= 50000")
         reader = cur.fetch_record_batch()
@@ -344,7 +344,7 @@ def test_dates_outside_the_nanosecond_range(oracle_server):
         assert hi == datetime.datetime(9999, 12, 31, 23, 59, 59, 999999)
         assert json.loads(j) == {"d": "0001-01-01T00:00:00"}
     with oracle.connect(
-        uri=oracle_server.uri, db_kwargs={"adbc.oracle.date_mode": "date32"}, autocommit=True
+        uri=oracle_server.uri, db_kwargs={"oracle.query.date_type": "date32"}, autocommit=True
     ) as conn, conn.cursor() as cur:
         # A pre-1970 DATE with a time of day keeps its own date (was the next day).
         cur.execute("SELECT TO_DATE('1960-01-02 12:00:00', 'YYYY-MM-DD HH24:MI:SS') AS d FROM DUAL")
@@ -947,7 +947,7 @@ def test_application_name_visible_in_session(oracle_server):
 
     with oracle.connect(
         uri=oracle_server.uri,
-        db_kwargs={"adbc.oracle.application_name": "adbc-it-appname"},
+        db_kwargs={"oracle.session.application_name": "adbc-it-appname"},
     ) as conn, conn.cursor() as cur:
         cur.execute("SELECT SYS_CONTEXT('USERENV', 'CLIENT_PROGRAM_NAME') AS p FROM DUAL")
         assert cur.fetchone()[0] == "adbc-it-appname"
@@ -958,7 +958,7 @@ def test_current_schema_option(oracle_server):
 
     with oracle.connect(
         uri=oracle_server.uri,
-        db_kwargs={"adbc.oracle.current_schema": "SYS"},
+        db_kwargs={"oracle.session.current_schema": "SYS"},
     ) as conn, conn.cursor() as cur:
         cur.execute("SELECT SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA') AS s FROM DUAL")
         assert cur.fetchone() == ("SYS",)
@@ -970,7 +970,7 @@ def test_connect_timeout_to_unroutable_host():
     with pytest.raises(oracle.Error):
         oracle.connect(
             uri="oracle://u:p@10.255.255.1:1521/NOPE",
-            db_kwargs={"adbc.oracle.connect_timeout": "1"},
+            db_kwargs={"oracle.connect_timeout_seconds": "1"},
         )
 
 
@@ -1031,7 +1031,7 @@ def test_23ai_and_extended_types(oracle_server, table_name):
 
 
 def test_number_mode_option(oracle_server):
-    """adbc.oracle.number_mode switches the NUMBER -> Arrow policy."""
+    """oracle.query.number_type switches the NUMBER -> Arrow policy."""
     import adbc_driver_oracle.dbapi as oracle
 
     sql = "SELECT CAST(7 AS NUMBER(10)) AS i, CAST(12.34 AS NUMBER(10,2)) AS d, 1/3 AS third FROM DUAL"
@@ -1043,7 +1043,7 @@ def test_number_mode_option(oracle_server):
     }
     for mode, types in expectations.items():
         with oracle.connect(
-            uri=oracle_server.uri, db_kwargs={"adbc.oracle.number_mode": mode}
+            uri=oracle_server.uri, db_kwargs={"oracle.query.number_type": mode}
         ) as conn, conn.cursor() as cur:
             cur.execute(sql)
             table = cur.fetch_arrow_table()
@@ -1101,7 +1101,7 @@ def test_interval_and_date_modes(oracle_server):
     sql = "SELECT DATE '2024-01-02' AS d, INTERVAL '1 02:03:04.5' DAY TO SECOND AS ds, INTERVAL '2-3' YEAR TO MONTH AS ym FROM DUAL"
     with oracle.connect(
         uri=oracle_server.uri,
-        db_kwargs={"adbc.oracle.interval_mode": "duration", "adbc.oracle.date_mode": "date32"},
+        db_kwargs={"oracle.query.interval_type": "duration", "oracle.query.date_type": "date32"},
     ) as conn, conn.cursor() as cur:
         cur.execute(sql)
         table = cur.fetch_arrow_table()
@@ -1111,7 +1111,7 @@ def test_interval_and_date_modes(oracle_server):
         assert row["D"] == datetime.date(2024, 1, 2)
         assert row["DS"] == datetime.timedelta(days=1, hours=2, minutes=3, seconds=4.5)
     with oracle.connect(
-        uri=oracle_server.uri, db_kwargs={"adbc.oracle.interval_mode": "string"}
+        uri=oracle_server.uri, db_kwargs={"oracle.query.interval_type": "string"}
     ) as conn, conn.cursor() as cur:
         cur.execute(sql)
         row = cur.fetch_arrow_table().to_pylist()[0]
@@ -1122,7 +1122,7 @@ def test_batch_bytes_bounds_batches(oracle_server):
     import adbc_driver_oracle.dbapi as oracle
 
     with oracle.connect(
-        uri=oracle_server.uri, db_kwargs={"adbc.oracle.batch_bytes": "20000"}
+        uri=oracle_server.uri, db_kwargs={"oracle.query.batch_bytes": "20000"}
     ) as conn, conn.cursor() as cur:
         cur.execute("SELECT RPAD('x', 1000, 'x') AS pad FROM DUAL CONNECT BY LEVEL <= 500")
         batches = list(cur.fetch_record_batch())
@@ -1137,11 +1137,11 @@ def test_batch_bytes_default_is_flight_safe(oracle_server):
     import adbc_driver_oracle.dbapi as oracle
 
     with oracle.connect(uri=oracle_server.uri) as conn:
-        assert conn.adbc_connection.get_option(key="adbc.oracle.batch_bytes") == "8388608"
+        assert conn.adbc_connection.get_option(key="oracle.query.batch_bytes") == "8388608"
     with oracle.connect(
-        uri=oracle_server.uri, db_kwargs={"adbc.oracle.batch_bytes": "0"}
+        uri=oracle_server.uri, db_kwargs={"oracle.query.batch_bytes": "0"}
     ) as conn:
-        assert conn.adbc_connection.get_option(key="adbc.oracle.batch_bytes") == "0"
+        assert conn.adbc_connection.get_option(key="oracle.query.batch_bytes") == "0"
 
 
 def test_cancel_running_statement(oracle_server):

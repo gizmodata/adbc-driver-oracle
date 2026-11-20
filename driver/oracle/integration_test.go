@@ -363,7 +363,7 @@ func TestBatchBytesDefault(t *testing.T) {
 	require.Equal(t, "0", got)
 }
 
-// adbc.oracle.nne=required must produce an encrypted session even against
+// oracle.nne=required must produce an encrypted session even against
 // a server that does not itself require NNE, and the session must report
 // it via the read-only nne_active / nne_algorithms options.
 func TestNNERequiredNegotiatesAndReports(t *testing.T) {

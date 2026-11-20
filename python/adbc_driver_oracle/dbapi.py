@@ -95,8 +95,8 @@ def connect(
         Oracle connection URL, e.g. ``"oracle://scott:tiger@localhost:1521/FREEPDB1"``.
     db_kwargs:
         Optional mapping of ADBC database options. Common keys:
-        ``adbc.oracle.tls`` to enable TLS,
-        ``adbc.oracle.connect_timeout`` for the dial timeout.
+        ``oracle.tls`` to enable TLS,
+        ``oracle.connect_timeout_seconds`` for the dial timeout.
     conn_kwargs:
         Optional mapping of ADBC connection options.
     autocommit:

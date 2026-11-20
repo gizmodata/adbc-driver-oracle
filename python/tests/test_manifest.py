@@ -64,13 +64,22 @@ def test_manifest_dir_scopes(monkeypatch, tmp_path):
         assert _manifest.manifest_dir("user") == tmp_path / "adbc/drivers"
 
 
-def test_option_enums_use_oracle_prefix():
-    from adbc_driver_oracle import DatabaseOptions
+def test_option_enums_follow_the_style_guide():
+    """Driver option keys are ``oracle.<...>``, never ``adbc.<...>`` (ADBC driver style guide)."""
+    from adbc_driver_oracle import ConnectionOptions, DatabaseOptions, StatementOptions
 
-    for opt in DatabaseOptions:
-        assert opt.value.startswith("adbc.oracle."), opt
-    assert DatabaseOptions.TLS.value == "adbc.oracle.tls"
-    assert DatabaseOptions.SERVICE_NAME.value == "adbc.oracle.service_name"
+    for enum_cls in (DatabaseOptions, ConnectionOptions, StatementOptions):
+        for opt in enum_cls.__members__.values():
+            assert opt.value.startswith("oracle."), opt
+            assert not opt.value.startswith("adbc."), opt
+    assert DatabaseOptions.TLS.value == "oracle.tls"
+    assert DatabaseOptions.SERVICE_NAME.value == "oracle.service_name"
+    assert DatabaseOptions.NUMBER_TYPE.value == "oracle.query.number_type"
+    # Members renamed in 1.1.0 keep their old member names as aliases.
+    assert DatabaseOptions.NUMBER_MODE is DatabaseOptions.NUMBER_TYPE
+    assert DatabaseOptions.CONNECT_TIMEOUT is DatabaseOptions.CONNECT_TIMEOUT_SECONDS
+    assert ConnectionOptions.DATE_MODE is ConnectionOptions.DATE_TYPE
+    assert StatementOptions.INGEST_STRING_TYPE.value == "oracle.ingest.string_type"
 
 
 @pytest.mark.parametrize(

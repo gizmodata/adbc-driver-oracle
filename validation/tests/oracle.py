@@ -184,8 +184,8 @@ class OracleQuirks(model.DriverQuirks):
             # options choose LOB columns instead (README "Bulk ingest").
             cursor.adbc_statement.set_options(
                 **{
-                    "adbc.oracle.ingest.string_type": "CLOB",
-                    "adbc.oracle.ingest.binary_type": "BLOB",
+                    "oracle.ingest.string_type": "CLOB",
+                    "oracle.ingest.binary_type": "BLOB",
                 }
             )
             yield

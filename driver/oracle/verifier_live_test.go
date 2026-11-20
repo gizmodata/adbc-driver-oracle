@@ -112,7 +112,7 @@ func TestLive10gVerifierRefusedByDefault(t *testing.T) {
 			require.Equal(t, adbc.StatusUnauthenticated, ae.Code, ae.Msg)
 			require.EqualValues(t, 0, ae.VendorCode, "refused by the driver, not the server: %s", ae.Msg)
 			require.Contains(t, ae.Msg, "10g (DES-based) password verifier")
-			require.Contains(t, ae.Msg, "adbc.oracle.allow_10g_verifier=true")
+			require.Contains(t, ae.Msg, "oracle.auth.allow_10g_verifier=true")
 			require.Contains(t, ae.Msg, "man-in-the-middle")
 		})
 	}

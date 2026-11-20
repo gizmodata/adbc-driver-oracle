@@ -22,28 +22,28 @@ func fromTTCError(err error) error {
 		return err
 	}
 	if oe, ok := ttc.AsError(err); ok {
-		return adbc.Error{Code: statusForORA(oe.Code), Msg: oe.Error(), VendorCode: int32(oe.Code)}
+		return adbc.Error{Code: statusForORA(oe.Code), Msg: driverMsg(oe.Error()), VendorCode: int32(oe.Code)}
 	}
 	if errors.Is(err, ttc.Err10gVerifierNotAllowed) {
-		return adbc.Error{Code: adbc.StatusUnauthenticated, Msg: err.Error()}
+		return adbc.Error{Code: adbc.StatusUnauthenticated, Msg: driverMsg(err.Error())}
 	}
 	if errors.Is(err, tns.ErrConnectionClosed) {
-		return adbc.Error{Code: adbc.StatusIO, Msg: err.Error()}
+		return adbc.Error{Code: adbc.StatusIO, Msg: driverMsg(err.Error())}
 	}
 	if errors.Is(err, context.Canceled) {
-		return adbc.Error{Code: adbc.StatusCancelled, Msg: err.Error()}
+		return adbc.Error{Code: adbc.StatusCancelled, Msg: driverMsg(err.Error())}
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return adbc.Error{Code: adbc.StatusTimeout, Msg: err.Error()}
+		return adbc.Error{Code: adbc.StatusTimeout, Msg: driverMsg(err.Error())}
 	}
 	var ne net.Error
 	if errors.As(err, &ne) {
 		if ne.Timeout() {
-			return adbc.Error{Code: adbc.StatusTimeout, Msg: err.Error()}
+			return adbc.Error{Code: adbc.StatusTimeout, Msg: driverMsg(err.Error())}
 		}
-		return adbc.Error{Code: adbc.StatusIO, Msg: err.Error()}
+		return adbc.Error{Code: adbc.StatusIO, Msg: driverMsg(err.Error())}
 	}
-	return adbc.Error{Code: adbc.StatusInternal, Msg: err.Error()}
+	return adbc.Error{Code: adbc.StatusInternal, Msg: driverMsg(err.Error())}
 }
 
 func statusForORA(code int) adbc.Status {

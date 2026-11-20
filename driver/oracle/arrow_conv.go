@@ -102,12 +102,12 @@ func arrowTypeFor(c *ttc.Column, opts typeOptions) (arrow.DataType, error) {
 	case ttc.TypeBoolean:
 		return arrow.FixedWidthTypes.Boolean, nil
 	case ttc.TypeVector:
-		return nil, errStatus(adbc.StatusNotImplemented, "oracle: column %q: VECTOR columns are not supported yet; select TO_CLOB(FROM_VECTOR(col)) or VECTOR_SERIALIZE(col) instead", c.Name)
+		return nil, errStatus(adbc.StatusNotImplemented, "column %q: VECTOR columns are not supported yet; select TO_CLOB(FROM_VECTOR(col)) or VECTOR_SERIALIZE(col) instead", c.Name)
 	case ttc.TypeObject:
 		dt, _, _ := objectArrowType(c, opts.useExtensionTypes)
 		return dt, nil
 	}
-	return nil, errStatus(adbc.StatusNotImplemented, "oracle: column %q: data type %s is not supported", c.Name, c.TypeName())
+	return nil, errStatus(adbc.StatusNotImplemented, "column %q: data type %s is not supported", c.Name, c.TypeName())
 }
 
 // schemaFor builds the Arrow schema for a described result set.
@@ -287,7 +287,7 @@ func (s *arrowSink) makeAppender(c *ttc.Column, b array.Builder) func([]byte) er
 				if err != nil {
 					f, ferr := strconv.ParseFloat(string(d.Text), 64)
 					if ferr != nil || f != math.Trunc(f) || f > math.MaxInt64 || f < math.MinInt64 {
-						return errStatus(adbc.StatusInvalidData, "oracle: column %q: value %s does not fit in int64 (set %s=decimal)", name, d.Text, OptionNumberMode)
+						return errStatus(adbc.StatusInvalidData, "column %q: value %s does not fit in int64 (set %s=decimal)", name, d.Text, OptionNumberMode)
 					}
 					v = int64(f)
 				}
@@ -307,7 +307,7 @@ func (s *arrowSink) makeAppender(c *ttc.Column, b array.Builder) func([]byte) er
 				}
 				f, err := strconv.ParseFloat(string(d.Text), 64)
 				if err != nil {
-					return errStatus(adbc.StatusInvalidData, "oracle: column %q: cannot parse number %s: %v", name, d.Text, err)
+					return errStatus(adbc.StatusInvalidData, "column %q: cannot parse number %s: %v", name, d.Text, err)
 				}
 				bb.Append(f)
 				return nil
@@ -322,7 +322,7 @@ func (s *arrowSink) makeAppender(c *ttc.Column, b array.Builder) func([]byte) er
 				s.scratch = d.Text
 				v, err := decimal128.FromString(string(d.Text), dt.Precision, dt.Scale)
 				if err != nil {
-					return errStatus(adbc.StatusInvalidData, "oracle: column %q: value %s does not fit decimal(%d,%d): %v", name, d.Text, dt.Precision, dt.Scale, err)
+					return errStatus(adbc.StatusInvalidData, "column %q: value %s does not fit decimal(%d,%d): %v", name, d.Text, dt.Precision, dt.Scale, err)
 				}
 				bb.Append(v)
 				return nil
@@ -373,7 +373,7 @@ func (s *arrowSink) makeAppender(c *ttc.Column, b array.Builder) func([]byte) er
 		return func(data []byte) error {
 			text, err := oratype.DecodeOSONToJSON(data, s.scratch[:0])
 			if err != nil {
-				return errStatus(adbc.StatusInvalidData, "oracle: column %q: %v", name, err)
+				return errStatus(adbc.StatusInvalidData, "column %q: %v", name, err)
 			}
 			s.scratch = text
 			bb.BinaryBuilder.Append(text)
@@ -411,7 +411,7 @@ func (s *arrowSink) makeAppender(c *ttc.Column, b array.Builder) func([]byte) er
 			perSecond := map[arrow.TimeUnit]int64{arrow.Second: 1, arrow.Millisecond: 1e3, arrow.Microsecond: 1e6, arrow.Nanosecond: 1e9}[unit]
 			v, ok := d.UnixUnit(perSecond)
 			if !ok {
-				return errStatus(adbc.StatusInvalidData, "oracle: %s is outside the range of timestamp[%s] (1677-09-21 to 2262-04-11 for nanoseconds)", d.Time().Format("2006-01-02T15:04:05.999999999"), unit)
+				return errStatus(adbc.StatusInvalidData, "%s is outside the range of timestamp[%s] (1677-09-21 to 2262-04-11 for nanoseconds)", d.Time().Format("2006-01-02T15:04:05.999999999"), unit)
 			}
 			bb.Append(arrow.Timestamp(v))
 			return nil
@@ -478,7 +478,7 @@ func (s *arrowSink) makeAppender(c *ttc.Column, b array.Builder) func([]byte) er
 		}
 	}
 	return func([]byte) error {
-		return errStatus(adbc.StatusNotImplemented, "oracle: column %q: data type %s is not supported", name, c.TypeName())
+		return errStatus(adbc.StatusNotImplemented, "column %q: data type %s is not supported", name, c.TypeName())
 	}
 }
 
@@ -624,7 +624,7 @@ func bindForArray(col arrow.Array, field arrow.Field, maxString uint32, supports
 			return nullOr(i, func(i int) ([]byte, error) {
 				v := a.Value(i)
 				if v.Months != 0 {
-					return nil, errStatus(adbc.StatusNotImplemented, "oracle: intervals with a month component cannot be bound as INTERVAL DAY TO SECOND")
+					return nil, errStatus(adbc.StatusNotImplemented, "intervals with a month component cannot be bound as INTERVAL DAY TO SECOND")
 				}
 				ns := v.Nanoseconds
 				h := ns / int64(time.Hour)
@@ -663,7 +663,7 @@ func bindForArray(col arrow.Array, field arrow.Field, maxString uint32, supports
 			}
 			j, err := json.Marshal(col.GetOneForMarshal(i))
 			if err != nil {
-				return b, errStatus(adbc.StatusInvalidArgument, "oracle: column %q: cannot encode nested value as JSON: %v", field.Name, err)
+				return b, errStatus(adbc.StatusInvalidArgument, "column %q: cannot encode nested value as JSON: %v", field.Name, err)
 			}
 			texts[i] = j
 			if len(j) > maxLen {
@@ -694,7 +694,7 @@ func bindForArray(col arrow.Array, field arrow.Field, maxString uint32, supports
 			return inner.Value(a.GetValueIndex(i))
 		}
 	default:
-		return b, errStatus(adbc.StatusNotImplemented, "oracle: cannot bind Arrow type %s (column %q)", col.DataType(), field.Name)
+		return b, errStatus(adbc.StatusNotImplemented, "cannot bind Arrow type %s (column %q)", col.DataType(), field.Name)
 	}
 	return b, nil
 }

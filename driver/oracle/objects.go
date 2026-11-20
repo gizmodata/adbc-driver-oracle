@@ -116,7 +116,7 @@ func (s *arrowSink) appendObject(ctx context.Context, conn *ttc.Conn, st *object
 	case objectXML:
 		v, err := ttc.DecodeXMLTypeImage(image)
 		if err != nil {
-			return errStatus(adbc.StatusInvalidData, "oracle: column %q: %v", st.col.Name, err)
+			return errStatus(adbc.StatusInvalidData, "column %q: %v", st.col.Name, err)
 		}
 		text, err := xmlText(ctx, conn, v)
 		if err != nil {
@@ -127,22 +127,22 @@ func (s *arrowSink) appendObject(ctx context.Context, conn *ttc.Conn, st *object
 	case objectGeometry:
 		v, err := ttc.DecodeObjectImage(st.typ, image)
 		if err != nil {
-			return errStatus(adbc.StatusInvalidData, "oracle: column %q: %v", st.col.Name, err)
+			return errStatus(adbc.StatusInvalidData, "column %q: %v", st.col.Name, err)
 		}
 		wkb, err := sdoGeometryToWKB(v)
 		if err != nil {
-			return errStatus(adbc.StatusInvalidData, "oracle: column %q: %v", st.col.Name, err)
+			return errStatus(adbc.StatusInvalidData, "column %q: %v", st.col.Name, err)
 		}
 		b.(*array.BinaryBuilder).Append(wkb)
 		return nil
 	}
 	v, err := ttc.DecodeObjectImage(st.typ, image)
 	if err != nil {
-		return errStatus(adbc.StatusInvalidData, "oracle: column %q: %v", st.col.Name, err)
+		return errStatus(adbc.StatusInvalidData, "column %q: %v", st.col.Name, err)
 	}
 	w := &jsonWriter{ctx: ctx, conn: conn}
 	if err := w.value(v); err != nil {
-		return errStatus(adbc.StatusInvalidData, "oracle: column %q: %v", st.col.Name, err)
+		return errStatus(adbc.StatusInvalidData, "column %q: %v", st.col.Name, err)
 	}
 	b.(*array.StringBuilder).BinaryBuilder.Append(w.out)
 	return nil
